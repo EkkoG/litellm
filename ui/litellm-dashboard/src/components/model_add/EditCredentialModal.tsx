@@ -7,6 +7,7 @@ import { CredentialItem } from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import ChatGPTCredentialDeviceLogin from "./ChatGPTCredentialDeviceLogin";
 const { Link } = Typography;
 
 interface EditCredentialsModalProps {
@@ -15,6 +16,7 @@ interface EditCredentialsModalProps {
   onUpdateCredential: (values: any) => void;
   uploadProps: UploadProps;
   existingCredential: CredentialItem | null;
+  onChatGPTCredentialUpdated?: () => void;
 }
 
 export default function EditCredentialsModal({
@@ -23,9 +25,13 @@ export default function EditCredentialsModal({
   onUpdateCredential,
   uploadProps,
   existingCredential,
+  onChatGPTCredentialUpdated,
 }: EditCredentialsModalProps) {
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.Anthropic);
+  const credentialName = Form.useWatch("credential_name", form);
+  const isChatGPTCredential =
+    selectedProvider === Providers.ChatGPT || existingCredential?.credential_info?.custom_llm_provider === "chatgpt";
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -40,6 +46,18 @@ export default function EditCredentialsModal({
 
   useEffect(() => {
     if (existingCredential) {
+      const provider =
+        existingCredential.credential_info.custom_llm_provider === "chatgpt"
+          ? Providers.ChatGPT
+          : (existingCredential.credential_info.custom_llm_provider as Providers);
+      if (provider === Providers.ChatGPT) {
+        form.setFieldsValue({
+          credential_name: existingCredential.credential_name,
+          custom_llm_provider: Providers.ChatGPT,
+        });
+        setSelectedProvider(Providers.ChatGPT);
+        return;
+      }
       // Spread all credential_values dynamically, converting undefined/null to null for form compatibility
       const credentialValues = Object.entries(existingCredential.credential_values || {}).reduce(
         (acc, [key, value]) => {
@@ -51,10 +69,10 @@ export default function EditCredentialsModal({
 
       form.setFieldsValue({
         credential_name: existingCredential.credential_name,
-        custom_llm_provider: existingCredential.credential_info.custom_llm_provider,
+        custom_llm_provider: provider,
         ...credentialValues,
       });
-      setSelectedProvider(existingCredential.credential_info.custom_llm_provider as Providers);
+      setSelectedProvider(provider);
     }
   }, [existingCredential]);
 
@@ -123,7 +141,15 @@ export default function EditCredentialsModal({
           </AntdSelect>
         </Form.Item>
 
-        <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+        {isChatGPTCredential ? (
+          <ChatGPTCredentialDeviceLogin
+            credentialName={credentialName || existingCredential?.credential_name}
+            overwriteExisting={true}
+            onComplete={onChatGPTCredentialUpdated}
+          />
+        ) : (
+          <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+        )}
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
@@ -141,7 +167,7 @@ export default function EditCredentialsModal({
             >
               Cancel
             </Button>
-            <Button htmlType="submit">{"Update Credential"}</Button>
+            {!isChatGPTCredential && <Button htmlType="submit">{"Update Credential"}</Button>}
           </div>
         </div>
       </Form>
