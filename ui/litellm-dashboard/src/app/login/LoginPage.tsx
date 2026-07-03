@@ -17,6 +17,7 @@ function LoginPageContent() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+  const [form] = Form.useForm();
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
   const loginMutation = useLogin();
   const router = useRouter();
@@ -98,7 +99,7 @@ function LoginPageContent() {
     setIsLoading(false);
   }, [isConfigLoading, router, uiConfig]);
 
-  const handleSubmit = () => {
+  const handleSubmit = (authMethod: "local" | "ldap" = "local") => {
     // If a worker is selected, point proxyBaseUrl at it before login
     const selectedWorker = workers.find((w) => w.worker_id === selectedWorkerId);
     if (selectedWorker) {
@@ -106,7 +107,7 @@ function LoginPageContent() {
     }
 
     loginMutation.mutate(
-      { username, password, useV3: !!selectedWorker },
+      { username, password, useV3: !!selectedWorker, authMethod },
       {
         onSuccess: (data) => {
           // Update the worker context with the selected worker
@@ -215,7 +216,7 @@ function LoginPageContent() {
 
           {error && <Alert message={error} type="error" showIcon />}
 
-          <Form onFinish={handleSubmit} layout="vertical" requiredMark={false}>
+          <Form form={form} onFinish={() => handleSubmit("local")} layout="vertical" requiredMark={false}>
             {uiConfig?.is_control_plane && workers.length > 0 && (
               <Form.Item label="Worker" style={{ marginBottom: 16 }}>
                 <Select
@@ -275,6 +276,24 @@ function LoginPageContent() {
                 {isLoginLoading ? "Logging in..." : "Login"}
               </Button>
             </Form.Item>
+            {uiConfig?.ldap_configured && (
+              <Form.Item>
+                <Button
+                  disabled={isLoginLoading}
+                  loading={isLoginLoading}
+                  onClick={() => {
+                    void form
+                      .validateFields()
+                      .then(() => handleSubmit("ldap"))
+                      .catch(() => undefined);
+                  }}
+                  block
+                  size="large"
+                >
+                  Login with LDAP
+                </Button>
+              </Form.Item>
+            )}
             <Form.Item>
               {!uiConfig?.sso_configured ? (
                 <Popover content="Please configure SSO to log in with SSO." trigger="hover">

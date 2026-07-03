@@ -13668,6 +13668,11 @@ async def login(request: Request):
     form = await request.form()
     username = str(form.get("username"))
     password = str(form.get("password"))
+    auth_method_value = form.get("auth_method")
+    auth_method = cast(
+        Optional[Literal["local", "ldap"]],
+        str(auth_method_value) if auth_method_value is not None else None,
+    )
 
     # Authenticate user and get login result
     login_result = await authenticate_user(
@@ -13675,6 +13680,7 @@ async def login(request: Request):
         password=password,
         master_key=master_key,
         prisma_client=prisma_client,
+        auth_method=auth_method,
     )
 
     # Create UI token object
@@ -13746,12 +13752,18 @@ async def login_v2(request: Request):
         body = await request.json()
         username = str(body.get("username"))
         password = str(body.get("password"))
+        auth_method_value = body.get("auth_method")
+        auth_method = cast(
+            Optional[Literal["local", "ldap"]],
+            str(auth_method_value) if auth_method_value is not None else None,
+        )
 
         login_result = await authenticate_user(
             username=username,
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            auth_method=auth_method,
         )
 
         returned_ui_token_object = create_ui_token_object(
@@ -13819,12 +13831,18 @@ async def login_v3(request: Request):
         body = await request.json()
         username = str(body.get("username"))
         password = str(body.get("password"))
+        auth_method_value = body.get("auth_method")
+        auth_method = cast(
+            Optional[Literal["local", "ldap"]],
+            str(auth_method_value) if auth_method_value is not None else None,
+        )
 
         login_result = await authenticate_user(
             username=username,
             password=password,
             master_key=master_key,
             prisma_client=prisma_client,
+            auth_method=auth_method,
         )
 
         returned_ui_token_object = create_ui_token_object(

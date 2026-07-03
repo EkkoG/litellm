@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LoginPage from "./LoginPage";
 
 const mockPush = vi.fn();
 const mockReplace = vi.fn();
+const mockLoginMutate = vi.hoisted(() => vi.fn());
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({
@@ -36,7 +37,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
 
 vi.mock("@/app/(dashboard)/hooks/login/useLogin", () => ({
   useLogin: vi.fn(() => ({
-    mutate: vi.fn(),
+    mutate: mockLoginMutate,
     isPending: false,
     error: null,
   })),
@@ -289,6 +290,82 @@ describe("LoginPage", () => {
     const ssoButton = screen.getByRole("button", { name: "Login with SSO" });
     expect(ssoButton).toBeInTheDocument();
     expect(ssoButton).toBeDisabled();
+  });
+
+  it("should show Login with LDAP button and submit ldap auth method when ldap_configured is true", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+        ldap_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Login with LDAP" })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "alice" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "ldap-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Login with LDAP" }));
+
+    await waitFor(() => {
+      expect(mockLoginMutate).toHaveBeenCalledWith(
+        {
+          username: "alice",
+          password: "ldap-password",
+          authMethod: "ldap",
+          useV3: false,
+        },
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("should validate required fields before LDAP login", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+        ldap_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Login with LDAP" })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Login with LDAP" }));
+
+    await waitFor(() => {
+      expect(screen.getByText("Please enter your username")).toBeInTheDocument();
+      expect(screen.getByText("Please enter your password")).toBeInTheDocument();
+    });
+    expect(mockLoginMutate).not.toHaveBeenCalled();
   });
 
   describe("URL ?token= legacy path is rejected (security regression test)", () => {
