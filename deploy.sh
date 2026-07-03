@@ -11,7 +11,7 @@ SERVICE_IMAGE_MAP_RAW=""
 REPO_ROOT="${REPO_ROOT:-}"
 PUSH_IMAGE=true
 VERSION=""
-PLATFORM="linux/amd64"
+PLATFORM="linux/amd64,linux/arm64"
 BUILD_ARGS=()
 EXTRA_BUILD_ARGS=()
 
@@ -30,7 +30,7 @@ Options:
       --service-context-map <m>    Service-to-context map: litellm=.
       --service-image-map <m>      Service-to-image-name map: litellm=litellm
       --repo-root <path>     Repo root (default: directory containing this script)
-      --platform <platform>  Target platform(s) (default: linux/amd64)
+      --platform <platform>  Target platform(s) (default: linux/amd64,linux/arm64)
       --build-arg <arg>      Build arg passed to docker buildx, repeatable
       --no-push              Build only, do not push. Requires a single platform
   -h, --help                 Show help
