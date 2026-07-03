@@ -7,7 +7,6 @@ from litellm.proxy.utils import jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CredentialItem
 
-
 CHATGPT_CREDENTIAL_PROVIDER = "chatgpt"
 
 
