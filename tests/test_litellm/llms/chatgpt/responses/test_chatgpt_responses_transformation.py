@@ -107,6 +107,41 @@ class TestChatGPTResponsesAPITransformation:
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
 
+    def test_chatgpt_converts_string_input_to_responses_input_list(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input="test from litellm",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "test from litellm"}],
+            }
+        ]
+
+    def test_chatgpt_preserves_responses_input_list(self):
+        input_list = [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ]
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.3-codex",
+            input=input_list,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == input_list
+
     @pytest.mark.parametrize(
         "model_name",
         [

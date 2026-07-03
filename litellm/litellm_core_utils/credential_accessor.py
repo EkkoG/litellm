@@ -15,6 +15,12 @@ class CredentialAccessor:
             return {}
         for credential in litellm.credential_list:
             if credential.credential_name == credential_name:
+                if (credential.credential_info or {}).get("custom_llm_provider") == "chatgpt":
+                    from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
+                        refresh_chatgpt_credential_if_needed,
+                    )
+
+                    return refresh_chatgpt_credential_if_needed(credential=credential)
                 return credential.credential_values.copy()
         return {}
 

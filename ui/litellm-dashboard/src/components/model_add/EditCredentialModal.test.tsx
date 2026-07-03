@@ -5,6 +5,10 @@ import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
 import EditCredentialModal from "./EditCredentialModal";
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "test-token" }),
+}));
+
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
@@ -74,6 +78,17 @@ const mockCredential: CredentialItem = {
   },
 };
 
+const mockChatGPTCredential: CredentialItem = {
+  credential_name: "chatgpt-admin",
+  credential_values: {
+    api_key: "****abcd",
+    chatgpt_refresh_token: "****wxyz",
+  },
+  credential_info: {
+    custom_llm_provider: Providers.ChatGPT,
+  },
+};
+
 describe("EditCredentialModal", () => {
   it("should render", () => {
     const queryClient = createQueryClient();
@@ -119,5 +134,26 @@ describe("EditCredentialModal", () => {
       expect(credentialNameInput.value).toBe("test-credential");
       expect(credentialNameInput.disabled).toBe(true);
     });
+  });
+
+  it("should render ChatGPT reconnect instead of masked token fields", async () => {
+    const queryClient = createQueryClient();
+    const onCancel = vi.fn();
+    const onUpdateCredential = vi.fn();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EditCredentialModal
+          open={true}
+          onCancel={onCancel}
+          onUpdateCredential={onUpdateCredential}
+          uploadProps={mockUploadProps}
+          existingCredential={mockChatGPTCredential}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("****abcd")).not.toBeInTheDocument();
   });
 });
