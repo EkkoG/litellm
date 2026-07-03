@@ -175,6 +175,11 @@ class CredentialLiteLLMParams(BaseModel):
     api_key: Optional[str] = None
     api_base: Optional[str] = None
     api_version: Optional[str] = None
+    chatgpt_access_token: Optional[str] = None
+    chatgpt_refresh_token: Optional[str] = None
+    chatgpt_id_token: Optional[str] = None
+    chatgpt_account_id: Optional[str] = None
+    chatgpt_expires_at: Optional[str] = None
     ## AZURE OAUTH ##
     # Without this field, ``get_deployment_credentials_with_provider``
     # round-trips ``litellm_params`` through a strict Pydantic dump and

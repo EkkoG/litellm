@@ -2540,6 +2540,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/chatgpt/device/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Poll Chatgpt Device Login */
+        post: operations["poll_chatgpt_device_login_credentials_chatgpt_device_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/chatgpt/device/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Chatgpt Device Login */
+        post: operations["start_chatgpt_device_login_credentials_chatgpt_device_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/migrate-encryption": {
         parameters: {
             query?: never;
@@ -22139,6 +22173,23 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** ChatGPTDeviceLoginPollRequest */
+        ChatGPTDeviceLoginPollRequest: {
+            /** Login Id */
+            login_id: string;
+        };
+        /** ChatGPTDeviceLoginStartRequest */
+        ChatGPTDeviceLoginStartRequest: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Credential Name */
+            credential_name: string;
+            /**
+             * Overwrite Existing
+             * @default false
+             */
+            overwrite_existing: boolean;
+        };
         /** ChatMessage */
         ChatMessage: {
             /** Content */
@@ -25627,6 +25678,16 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Chatgpt Access Token */
+            chatgpt_access_token?: string | null;
+            /** Chatgpt Account Id */
+            chatgpt_account_id?: string | null;
+            /** Chatgpt Expires At */
+            chatgpt_expires_at?: string | null;
+            /** Chatgpt Id Token */
+            chatgpt_id_token?: string | null;
+            /** Chatgpt Refresh Token */
+            chatgpt_refresh_token?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -33451,6 +33512,16 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Chatgpt Access Token */
+            chatgpt_access_token?: string | null;
+            /** Chatgpt Account Id */
+            chatgpt_account_id?: string | null;
+            /** Chatgpt Expires At */
+            chatgpt_expires_at?: string | null;
+            /** Chatgpt Id Token */
+            chatgpt_id_token?: string | null;
+            /** Chatgpt Refresh Token */
+            chatgpt_refresh_token?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -37672,6 +37743,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CredentialItem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_chatgpt_device_login_credentials_chatgpt_device_poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTDeviceLoginPollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_chatgpt_device_login_credentials_chatgpt_device_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTDeviceLoginStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

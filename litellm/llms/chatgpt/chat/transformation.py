@@ -30,16 +30,7 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: Optional[str],
         custom_llm_provider: str,
     ) -> Tuple[Optional[str], Optional[str], str]:
-        dynamic_api_base = self.authenticator.get_api_base()
-        try:
-            dynamic_api_key = self.authenticator.get_access_token()
-        except GetAccessTokenError as e:
-            raise AuthenticationError(
-                model=model,
-                llm_provider=custom_llm_provider,
-                message=str(e),
-            )
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        return api_base or self.authenticator.get_api_base(), api_key, custom_llm_provider
 
     def validate_environment(
         self,
@@ -55,9 +46,18 @@ class ChatGPTConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        account_id = self.authenticator.get_account_id()
+        try:
+            access_token = self.authenticator.get_access_token(api_key=api_key, litellm_params=litellm_params)
+        except GetAccessTokenError as e:
+            raise AuthenticationError(
+                model=model,
+                llm_provider="chatgpt",
+                message=str(e),
+            )
+
+        account_id = self.authenticator.get_account_id(litellm_params=litellm_params, access_token=access_token)
         session_id = ensure_chatgpt_session_id(litellm_params)
-        default_headers = get_chatgpt_default_headers(api_key or "", account_id, session_id)
+        default_headers = get_chatgpt_default_headers(access_token, account_id, session_id)
         return {**default_headers, **validated_headers}
 
     def post_stream_processing(self, stream: Any) -> Any:
