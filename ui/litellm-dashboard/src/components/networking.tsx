@@ -276,6 +276,7 @@ export interface LiteLLMWellKnownUiConfig {
   auto_redirect_to_sso: boolean;
   admin_ui_disabled: boolean;
   sso_configured: boolean;
+  ldap_configured?: boolean;
   hide_default_credentials_hint?: boolean;
   is_control_plane?: boolean;
   workers?: WorkerInfo[];
@@ -6384,6 +6385,29 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
   }
 };
 
+export const getLDAPSettings = async (accessToken: string) => {
+  try {
+    const data = await apiClient.get(`/get/ldap_settings`, { accessToken });
+    console.log("Fetched LDAP configuration:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to fetch LDAP configuration:", error);
+    throw error;
+  }
+};
+
+export const updateLDAPSettings = async (accessToken: string, settings: Record<string, unknown>) => {
+  try {
+    console.log("Updating LDAP configuration:", settings);
+    const data = await apiClient.patch(`/update/ldap_settings`, { accessToken, body: settings });
+    console.log("Updated LDAP configuration:", data);
+    return data;
+  } catch (error) {
+    console.error("Failed to update LDAP configuration:", error);
+    throw error;
+  }
+};
+
 interface UiAuditLogsParams {
   action?: string;
   table_name?: string;
@@ -7011,6 +7035,7 @@ export interface LoginRequest {
   username: string;
   password: string;
   useV3?: boolean;
+  authMethod?: "local" | "ldap";
 }
 
 interface LoginResponse {
@@ -7020,7 +7045,12 @@ interface LoginResponse {
   expires_in?: number;
 }
 
-export const loginCall = async (username: string, password: string, useV3?: boolean): Promise<LoginResponse> => {
+export const loginCall = async (
+  username: string,
+  password: string,
+  useV3?: boolean,
+  authMethod?: "local" | "ldap",
+): Promise<LoginResponse> => {
   const proxyBaseUrl = getProxyBaseUrl();
   const loginPath = useV3 ? "/v3/login" : "/v2/login";
   const loginUrl = proxyBaseUrl ? `${proxyBaseUrl}${loginPath}` : loginPath;
@@ -7028,6 +7058,7 @@ export const loginCall = async (username: string, password: string, useV3?: bool
   const body = JSON.stringify({
     username,
     password,
+    ...(authMethod ? { auth_method: authMethod } : {}),
   });
 
   const response = await fetch(loginUrl, {

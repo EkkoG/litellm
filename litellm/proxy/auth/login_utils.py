@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     UpdateUserRequest,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.ldap_auth import authenticate_ldap_user
 from litellm.proxy.management_endpoints.internal_user_endpoints import user_update
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     generate_key_helper_fn,
@@ -103,11 +104,119 @@ class LoginResult:
         self.login_method = login_method
 
 
+async def _generate_ui_session_key(user_id: str, user_role: str) -> str:
+    if os.getenv("DATABASE_URL") is None:
+        raise ProxyException(
+            message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
+            type=ProxyErrorTypes.auth_error,
+            param="DATABASE_URL",
+            code=500,
+        )
+
+    response = await generate_key_helper_fn(
+        request_type="key",
+        **{
+            "user_role": user_role,
+            "duration": LITELLM_UI_SESSION_DURATION,
+            "key_max_budget": litellm.max_ui_session_budget,
+            "models": [],
+            "aliases": {},
+            "config": {},
+            "spend": 0,
+            "user_id": user_id,
+            "team_id": "litellm-dashboard",
+        },
+    )
+    return response["token"]  # type: ignore
+
+
+async def _authenticate_ldap_ui_user(
+    username: str,
+    password: str,
+    prisma_client: Optional[PrismaClient],
+) -> LoginResult:
+    ldap_user = await authenticate_ldap_user(
+        username=username,
+        password=password,
+        prisma_client=prisma_client,
+    )
+    user_id = getattr(ldap_user, "user_id")
+    user_email = getattr(ldap_user, "user_email", None)
+    user_role = getattr(ldap_user, "user_role", LitellmUserRoles.INTERNAL_USER)
+    key = await _generate_ui_session_key(user_id=user_id, user_role=user_role)
+    return LoginResult(
+        user_id=user_id,
+        key=key,
+        user_email=user_email,
+        user_role=cast(str, user_role),
+        login_method="username_password",
+    )
+
+
+def _is_local_admin_credentials(username: str, password: str, ui_username: str, ui_password: str) -> bool:
+    return secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
+        password.encode("utf-8"), ui_password.encode("utf-8")
+    )
+
+
+async def _authenticate_local_admin_user(_user_row: Optional[LiteLLM_UserTable]) -> LoginResult:
+    user_role = LitellmUserRoles.PROXY_ADMIN
+    user_id = LITELLM_PROXY_ADMIN_NAME
+
+    key_user_id = LITELLM_PROXY_ADMIN_NAME
+    if (
+        os.getenv("PROXY_ADMIN_ID", None) is not None and os.environ["PROXY_ADMIN_ID"] == user_id
+    ) or user_id == LITELLM_PROXY_ADMIN_NAME:
+        key_user_id = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
+
+    await user_update(
+        data=UpdateUserRequest(
+            user_id=key_user_id,
+            user_role=user_role,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    key = await _generate_ui_session_key(user_id=key_user_id, user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+        from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
+        user_info: Optional[LiteLLM_UserTable] = None
+        if _user_row is not None:
+            user_info = _user_row
+        elif user_id is not None:
+            user_info = LiteLLM_UserTable(
+                user_id=user_id,
+                user_role=user_role,
+                models=[],
+                max_budget=litellm.max_ui_session_budget,
+            )
+        if user_info is None:
+            raise HTTPException(
+                status_code=401,
+                detail={"error": "User Information is required for experimental UI login"},
+            )
+
+        key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
+
+    return LoginResult(
+        user_id=user_id,
+        key=key,
+        user_email=None,
+        user_role=cast(str, user_role),
+        login_method="username_password",
+    )
+
+
 async def authenticate_user(
     username: str,
     password: str,
     master_key: Optional[str],
     prisma_client: Optional[PrismaClient],
+    auth_method: Optional[Literal["local", "ldap"]] = None,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.
@@ -128,6 +237,14 @@ async def authenticate_user(
     Raises:
         ProxyException: If authentication fails or required configuration is missing
     """
+    if auth_method not in (None, "local", "ldap"):
+        raise ProxyException(
+            message=f"Unsupported auth_method: {auth_method}",
+            type=ProxyErrorTypes.auth_error,
+            param="auth_method",
+            code=400,
+        )
+
     if master_key is None:
         raise ProxyException(
             message="Master Key not set for Proxy. Please set Master Key to use Admin UI. Set `LITELLM_MASTER_KEY` in .env or set general_settings:master_key in config.yaml.  https://docs.litellm.ai/docs/proxy/virtual_keys. If set, use `--detailed_debug` to debug issue.",
@@ -137,6 +254,13 @@ async def authenticate_user(
         )
 
     ui_username, ui_password = get_ui_credentials(master_key)
+
+    if auth_method == "ldap":
+        return await _authenticate_ldap_ui_user(
+            username=username,
+            password=password,
+            prisma_client=prisma_client,
+        )
 
     # Check if we can find the `username` in the db. On the UI, users can enter username=their email
     _user_row: Optional[LiteLLM_UserTable] = None
@@ -162,87 +286,8 @@ async def authenticate_user(
     - Login with UI_USERNAME and UI_PASSWORD
     - Login with Invite Link `user_email` and `password` combination
     """
-    if secrets.compare_digest(username.encode("utf-8"), ui_username.encode("utf-8")) and secrets.compare_digest(
-        password.encode("utf-8"), ui_password.encode("utf-8")
-    ):
-        # Non SSO -> If user is using UI_USERNAME and UI_PASSWORD they are Proxy admin
-        user_role = LitellmUserRoles.PROXY_ADMIN
-        user_id = LITELLM_PROXY_ADMIN_NAME
-
-        # we want the key created to have PROXY_ADMIN_PERMISSIONS
-        key_user_id = LITELLM_PROXY_ADMIN_NAME
-        if (
-            os.getenv("PROXY_ADMIN_ID", None) is not None and os.environ["PROXY_ADMIN_ID"] == user_id
-        ) or user_id == LITELLM_PROXY_ADMIN_NAME:
-            # checks if user is admin
-            key_user_id = os.getenv("PROXY_ADMIN_ID", LITELLM_PROXY_ADMIN_NAME)
-
-        # Admin is Authe'd in - generate key for the UI to access Proxy
-
-        # ensure this user is set as the proxy admin, in this route there is no sso, we can assume this user is only the admin
-        await user_update(
-            data=UpdateUserRequest(
-                user_id=key_user_id,
-                user_role=user_role,
-            ),
-            user_api_key_dict=UserAPIKeyAuth(
-                user_role=LitellmUserRoles.PROXY_ADMIN,
-            ),
-        )
-
-        if os.getenv("DATABASE_URL") is not None:
-            response = await generate_key_helper_fn(
-                request_type="key",
-                **{
-                    "user_role": LitellmUserRoles.PROXY_ADMIN,
-                    "duration": LITELLM_UI_SESSION_DURATION,
-                    "key_max_budget": litellm.max_ui_session_budget,
-                    "models": [],
-                    "aliases": {},
-                    "config": {},
-                    "spend": 0,
-                    "user_id": key_user_id,
-                    "team_id": "litellm-dashboard",
-                },  # type: ignore
-            )
-        else:
-            raise ProxyException(
-                message="No Database connected. Set DATABASE_URL in .env. If set, use `--detailed_debug` to debug issue.",
-                type=ProxyErrorTypes.auth_error,
-                param="DATABASE_URL",
-                code=500,
-            )
-
-        key = response["token"]  # type: ignore
-
-        if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
-            from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
-
-            user_info: Optional[LiteLLM_UserTable] = None
-            if _user_row is not None:
-                user_info = _user_row
-            elif user_id is not None:  # if user_id is not None, we are using the UI_USERNAME and UI_PASSWORD
-                user_info = LiteLLM_UserTable(
-                    user_id=user_id,
-                    user_role=user_role,
-                    models=[],
-                    max_budget=litellm.max_ui_session_budget,
-                )
-            if user_info is None:
-                raise HTTPException(
-                    status_code=401,
-                    detail={"error": "User Information is required for experimental UI login"},
-                )
-
-            key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
-
-        return LoginResult(
-            user_id=user_id,
-            key=key,
-            user_email=None,
-            user_role=user_role,
-            login_method="username_password",
-        )
+    if _is_local_admin_credentials(username, password, ui_username, ui_password):
+        return await _authenticate_local_admin_user(_user_row)
 
     elif _user_row is not None:
         """
