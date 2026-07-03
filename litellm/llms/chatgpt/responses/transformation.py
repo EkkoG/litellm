@@ -75,6 +75,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             litellm_params,
             headers,
         )
+        self._normalize_system_input_messages(request)
         base_instructions = get_chatgpt_default_instructions()
         existing_instructions = request.get("instructions")
         if existing_instructions:
@@ -117,6 +118,59 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 ],
             )
         return input
+
+    def _normalize_system_input_messages(self, request: dict) -> None:
+        input_items = request.get("input")
+        if not isinstance(input_items, list):
+            return
+
+        system_items = tuple(item for item in input_items if self._is_system_input_message(item))
+        if not system_items:
+            return
+
+        non_system_items = tuple(item for item in input_items if not self._is_system_input_message(item))
+        if not non_system_items:
+            request["input"] = [self._copy_message_with_role(item, "user") for item in system_items]
+            return
+
+        system_instructions = tuple(
+            text for item in system_items for text in (self._extract_message_text(item),) if text
+        )
+        request["input"] = list(non_system_items)
+        request["instructions"] = self._join_instructions(system_instructions, request.get("instructions"))
+
+    def _is_system_input_message(self, item: object) -> bool:
+        return isinstance(item, dict) and item.get("role") == "system"
+
+    def _copy_message_with_role(self, item: object, role: str) -> object:
+        if not isinstance(item, dict):
+            return item
+        return {**item, "role": role}
+
+    def _extract_message_text(self, item: object) -> Optional[str]:
+        if not isinstance(item, dict):
+            return None
+        return self._extract_content_text(item.get("content"))
+
+    def _extract_content_text(self, content: object) -> Optional[str]:
+        if isinstance(content, str):
+            return content
+        if not isinstance(content, list):
+            return None
+        parts = tuple(text for block in content for text in (self._extract_content_block_text(block),) if text)
+        return "\n".join(parts) if parts else None
+
+    def _extract_content_block_text(self, block: object) -> Optional[str]:
+        if isinstance(block, str):
+            return block
+        if not isinstance(block, dict):
+            return None
+        text = block.get("text")
+        return text if isinstance(text, str) else None
+
+    def _join_instructions(self, system_instructions: tuple[str, ...], existing_instructions: object) -> str:
+        existing = (existing_instructions,) if isinstance(existing_instructions, str) and existing_instructions else ()
+        return "\n\n".join((*system_instructions, *existing))
 
     def transform_response_api_response(
         self,

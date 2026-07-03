@@ -142,6 +142,60 @@ class TestChatGPTResponsesAPITransformation:
 
         assert request["input"] == input_list
 
+    def test_chatgpt_moves_system_input_messages_to_instructions(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.4",
+            input=[
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": "Be concise."}],
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hello"}],
+            }
+        ]
+        assert "Be concise." in request["instructions"]
+
+    def test_chatgpt_converts_system_only_input_to_user_message(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.4",
+            input=[
+                {
+                    "type": "message",
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": "You are a helpful assistant."}],
+                }
+            ],
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "You are a helpful assistant."}],
+            }
+        ]
+
     @pytest.mark.parametrize(
         "model_name",
         [
