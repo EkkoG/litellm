@@ -6,6 +6,7 @@ import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import ChatGPTCredentialDeviceLogin from "./ChatGPTCredentialDeviceLogin";
 const { Link } = Typography;
 
 interface AddCredentialsModalProps {
@@ -13,11 +14,21 @@ interface AddCredentialsModalProps {
   onCancel: () => void;
   onAddCredential: (values: any) => void;
   uploadProps: UploadProps;
+  onChatGPTCredentialCreated?: () => void;
+  initialProvider?: Providers;
 }
 
-const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCancel, onAddCredential, uploadProps }) => {
+const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
+  open,
+  onCancel,
+  onAddCredential,
+  uploadProps,
+  onChatGPTCredentialCreated,
+  initialProvider = Providers.OpenAI,
+}) => {
   const [form] = Form.useForm();
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(initialProvider);
+  const credentialName = Form.useWatch("credential_name", form);
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -41,7 +52,12 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
       footer={null}
       width={600}
     >
-      <Form form={form} onFinish={handleSubmit} layout="vertical">
+      <Form
+        form={form}
+        onFinish={handleSubmit}
+        layout="vertical"
+        initialValues={{ custom_llm_provider: initialProvider }}
+      >
         {/* Credential Name */}
         <Form.Item
           label="Credential Name:"
@@ -90,7 +106,15 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
           </AntdSelect>
         </Form.Item>
 
-        <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+        {selectedProvider === Providers.ChatGPT ? (
+          <ChatGPTCredentialDeviceLogin
+            credentialName={credentialName}
+            overwriteExisting={false}
+            onComplete={onChatGPTCredentialCreated}
+          />
+        ) : (
+          <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
+        )}
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
@@ -108,7 +132,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({ open, onCance
             >
               Cancel
             </Button>
-            <Button htmlType="submit">{"Add Credential"}</Button>
+            {selectedProvider !== Providers.ChatGPT && <Button htmlType="submit">{"Add Credential"}</Button>}
           </div>
         </div>
       </Form>

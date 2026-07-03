@@ -4,6 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import AddCredentialModal from "./AddCredentialModal";
 
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => ({ accessToken: "test-token" }),
+}));
+
 vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
@@ -104,5 +108,26 @@ describe("AddCredentialModal", () => {
       expect(screen.getByLabelText("OpenAI API Key")).toBeInTheDocument();
       expect(screen.getByPlaceholderText("https://api.openai.com/v1")).toBeInTheDocument();
     });
+  });
+
+  it("should render ChatGPT device login instead of credential fields", async () => {
+    const queryClient = createQueryClient();
+    const onCancel = vi.fn();
+    const onAddCredential = vi.fn();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddCredentialModal
+          open={true}
+          onCancel={onCancel}
+          onAddCredential={onAddCredential}
+          uploadProps={mockUploadProps}
+          initialProvider={Providers.ChatGPT}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
   });
 });
