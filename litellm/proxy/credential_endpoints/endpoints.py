@@ -6,7 +6,7 @@ import time
 import uuid
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import BaseModel
 
 import litellm
@@ -15,10 +15,10 @@ from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.llms.chatgpt.authenticator import DEVICE_CODE_TIMEOUT_SECONDS, Authenticator
 from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL, GetAccessTokenError, GetDeviceCodeError
-from litellm.proxy.credential_endpoints.chatgpt_credential_utils import build_chatgpt_credential_values
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.credential_endpoints.chatgpt_credential_utils import build_chatgpt_credential_values
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
