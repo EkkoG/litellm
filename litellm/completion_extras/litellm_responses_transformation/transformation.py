@@ -4,6 +4,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 
 import json
 import os
+from collections import Counter
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -584,6 +585,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return choices
 
+    @staticmethod
+    def _summarize_output_item_types(output_items: List[Any]) -> Dict[str, int]:
+        return dict(
+            Counter(
+                item.get("type", "<missing-type>")
+                if isinstance(item, dict)
+                else type(item).__name__
+                for item in output_items
+            )
+        )
+
     @classmethod
     def _extract_output_from_completed_event(cls, parsed_chunk: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
         response_payload = parsed_chunk.get("response")
@@ -601,6 +613,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         recovered_output_items: Dict[int, Dict[str, Any]] = {}
         recovered_text_only_items: Dict[int, Dict[str, Any]] = {}
+        event_counts: Dict[str, int] = {}
 
         for chunk in raw_sse.splitlines():
             parsed_chunk = parse_sse_json_chunk(chunk)
@@ -608,10 +621,17 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 continue
 
             event_type = parsed_chunk.get("type")
+            if isinstance(event_type, str):
+                event_counts[event_type] = event_counts.get(event_type, 0) + 1
 
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
                 recovered_output = cls._extract_output_from_completed_event(parsed_chunk)
                 if recovered_output is not None:
+                    verbose_logger.debug(
+                        "Responses API SSE recovery used response.completed output event_counts=%s item_types=%s",
+                        event_counts,
+                        cls._summarize_output_item_types(recovered_output),
+                    )
                     return recovered_output
                 continue
 
@@ -630,16 +650,23 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
                 continue
 
-        # Merge text-only items into the recovered output items. Real
-        # OUTPUT_ITEM_DONE events take precedence at any given output_index,
-        # but text-only items at indices without a matching OUTPUT_ITEM_DONE
-        # must still be preserved (e.g. multi-output responses where some
-        # indices only emitted OUTPUT_TEXT_DONE).
         merged_items: Dict[int, Dict[str, Any]] = {**recovered_text_only_items}
         merged_items.update(recovered_output_items)
 
         if merged_items:
-            return [item for _, item in sorted(merged_items.items())]
+            recovered_items = [item for _, item in sorted(merged_items.items())]
+            verbose_logger.debug(
+                "Responses API SSE recovery rebuilt output from streamed events event_counts=%s item_types=%s",
+                event_counts,
+                cls._summarize_output_item_types(recovered_items),
+            )
+            return recovered_items
+
+        if event_counts:
+            verbose_logger.debug(
+                "Responses API SSE recovery found no output items event_counts=%s",
+                event_counts,
+            )
 
         return []
 
@@ -675,6 +702,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         output_items = raw_response.output
         if len(output_items) == 0:
+            verbose_logger.debug(
+                "Responses API transform saw empty output model=%s response_id=%s incomplete_details=%s",
+                model,
+                getattr(raw_response, "id", None),
+                raw_response.incomplete_details,
+            )
             recovered_output_items = self._recover_output_items_from_logging(logging_obj)
             if recovered_output_items:
                 output_items = cast(Any, recovered_output_items)
@@ -691,6 +724,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
 
         if len(choices) == 0:
+            verbose_logger.debug(
+                "Responses API transform produced no choices model=%s response_id=%s output_item_types=%s output_items=%s",
+                model,
+                getattr(raw_response, "id", None),
+                self._summarize_output_item_types(output_items),
+                output_items,
+            )
             if raw_response.incomplete_details is not None and raw_response.incomplete_details.reason is not None:
                 raise ValueError(f"{model} unable to complete request: {raw_response.incomplete_details.reason}")
             else:
