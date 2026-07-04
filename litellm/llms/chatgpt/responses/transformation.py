@@ -1,5 +1,6 @@
 from typing import Any, Optional, cast
 
+from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
@@ -220,16 +221,34 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         error_message = None
         streamed_output_items: dict[int, dict] = {}
         text_only_output_items: dict[int, dict] = {}
+        event_counts: dict[str, int] = {}
         for chunk in body_text.splitlines():
             parsed_chunk = parse_sse_json_chunk(chunk)
             if parsed_chunk is None:
                 continue
 
             event_type = parsed_chunk.get("type")
+            if isinstance(event_type, str):
+                event_counts[event_type] = event_counts.get(event_type, 0) + 1
+
             if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
                 record_output_item_chunk(
                     parsed_chunk=parsed_chunk,
                     output_items=streamed_output_items,
+                )
+                verbose_logger.debug(
+                    "ChatGPT SSE output_item.done output_index=%s item_type=%s item_id=%s",
+                    parsed_chunk.get("output_index"),
+                    (
+                        ((parsed_chunk.get("item") or {}) if isinstance(parsed_chunk.get("item"), dict) else {}).get(
+                            "type"
+                        )
+                    ),
+                    (
+                        ((parsed_chunk.get("item") or {}) if isinstance(parsed_chunk.get("item"), dict) else {}).get(
+                            "id"
+                        )
+                    ),
                 )
                 continue
 
@@ -239,18 +258,29 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                     output_items=streamed_output_items,
                     text_only_items=text_only_output_items,
                 )
+                verbose_logger.debug(
+                    "ChatGPT SSE output_text.done output_index=%s content_index=%s text_len=%s",
+                    parsed_chunk.get("output_index"),
+                    parsed_chunk.get("content_index"),
+                    len(parsed_chunk.get("text", "")) if isinstance(parsed_chunk.get("text"), str) else None,
+                )
                 continue
 
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
-                # Real OUTPUT_ITEM_DONE events take precedence at any given
-                # output_index, but text-only items at indices without a
-                # matching OUTPUT_ITEM_DONE must still be preserved (e.g.
-                # providers that emit only OUTPUT_TEXT_DONE for some indices).
                 merged_items: dict[int, dict] = {**text_only_output_items}
                 merged_items.update(streamed_output_items)
                 completed_response = self._build_completed_response_from_chunk(
                     parsed_chunk=parsed_chunk,
                     streamed_output_items=merged_items,
+                )
+                response_payload = parsed_chunk.get("response")
+                response_output = response_payload.get("output") if isinstance(response_payload, dict) else None
+                verbose_logger.debug(
+                    "ChatGPT SSE response.completed response_output_len=%s recovered_output_len=%s event_counts=%s incomplete_details=%s",
+                    len(response_output) if isinstance(response_output, list) else None,
+                    len(merged_items),
+                    event_counts,
+                    response_payload.get("incomplete_details") if isinstance(response_payload, dict) else None,
                 )
                 break
 
@@ -261,6 +291,20 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 extracted_error = self._extract_error_message(parsed_chunk)
                 if extracted_error is not None:
                     error_message = extracted_error
+                    verbose_logger.debug(
+                        "ChatGPT SSE terminal error event_type=%s message=%s event_counts=%s",
+                        event_type,
+                        extracted_error,
+                        event_counts,
+                    )
+
+        if completed_response is None and error_message is None and event_counts:
+            verbose_logger.debug(
+                "ChatGPT SSE parse ended without completed response event_counts=%s recovered_item_count=%s recovered_text_item_count=%s",
+                event_counts,
+                len(streamed_output_items),
+                len(text_only_output_items),
+            )
 
         return completed_response, error_message
 
@@ -273,11 +317,21 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         response_payload = dict(response_payload)
         if not response_payload.get("output") and streamed_output_items:
             response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
+            verbose_logger.debug(
+                "ChatGPT SSE filled empty response.completed output from streamed items count=%s item_types=%s",
+                len(streamed_output_items),
+                [item.get("type") for _, item in sorted(streamed_output_items.items())],
+            )
         if "created_at" in response_payload:
             response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
         try:
             return ResponsesAPIResponse(**response_payload)
         except Exception:
+            verbose_logger.debug(
+                "ChatGPT SSE ResponsesAPIResponse validation failed, using model_construct response_id=%s",
+                response_payload.get("id"),
+                exc_info=True,
+            )
             return ResponsesAPIResponse.model_construct(**response_payload)
 
     def _extract_error_message(self, parsed_chunk: dict[str, Any]) -> Optional[str]:
