@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.litellm_core_utils.thread_pool_executor import executor
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.responses.sse_output_recovery import parse_sse_json_chunk
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import ResponsesAPIStreamEvents
 from litellm.types.utils import CallTypes
@@ -78,6 +79,17 @@ class BaseResponsesAPIStreamingIterator:
         self._completed_response_cache_hit: Optional[bool] = None
         self._persist_completed_response_before_logging = True
         self._stream_created_time: float = time.time()
+        self._raw_sse_chunks: List[str] = []
+        self._stream_event_counts: Dict[str, int] = {}
+
+        verbose_logger.debug(
+            "Responses streaming iterator created model=%s custom_llm_provider=%s response_type=%s status_code=%s content_type=%s",
+            model,
+            custom_llm_provider,
+            type(response).__name__,
+            getattr(response, "status_code", None),
+            (getattr(response, "headers", {}) or {}).get("content-type"),
+        )
 
         # track request context for hooks
         self.litellm_metadata = litellm_metadata
@@ -113,10 +125,87 @@ class BaseResponsesAPIStreamingIterator:
                 llm_provider=self.custom_llm_provider or "",
             )
 
+    def _record_sse_chunk(self, chunk: str) -> None:
+        self._raw_sse_chunks.append(chunk)
+        parsed_chunk = parse_sse_json_chunk(chunk)
+        if parsed_chunk is None:
+            return
+        event_type = parsed_chunk.get("type")
+        if isinstance(event_type, str):
+            self._stream_event_counts[event_type] = self._stream_event_counts.get(event_type, 0) + 1
+
+    def _get_raw_sse_body(self) -> Optional[str]:
+        if not self._raw_sse_chunks:
+            return None
+        return "\n".join(self._raw_sse_chunks)
+
+    def _persist_raw_sse_to_logging(self) -> None:
+        raw_sse_body = self._get_raw_sse_body()
+        if raw_sse_body is None:
+            return
+        model_call_details = getattr(self.logging_obj, "model_call_details", None)
+        if isinstance(model_call_details, dict):
+            model_call_details["original_response"] = raw_sse_body
+        verbose_logger.debug(
+            "Responses streaming iterator persisted raw SSE model=%s custom_llm_provider=%s raw_sse_len=%s raw_sse_prefix=%r event_counts=%s",
+            self.model,
+            self.custom_llm_provider,
+            len(raw_sse_body),
+            raw_sse_body[:200],
+            self._stream_event_counts,
+        )
+
+    def _log_terminal_event(self, event_type: str) -> None:
+        response_obj = self._get_completed_response_object()
+        output_items = getattr(response_obj, "output", None) if response_obj is not None else None
+        verbose_logger.debug(
+            "Responses streaming iterator terminal event model=%s custom_llm_provider=%s event_type=%s output_len=%s status=%s incomplete_details=%s error=%s response_id=%s raw_sse_len=%s event_counts=%s",
+            self.model,
+            self.custom_llm_provider,
+            event_type,
+            len(output_items) if isinstance(output_items, list) else None,
+            getattr(response_obj, "status", None) if response_obj is not None else None,
+            getattr(response_obj, "incomplete_details", None) if response_obj is not None else None,
+            getattr(response_obj, "error", None) if response_obj is not None else None,
+            getattr(response_obj, "id", None) if response_obj is not None else None,
+            len(self._get_raw_sse_body() or ""),
+            self._stream_event_counts,
+        )
+
+    def _log_raw_terminal_chunk(self, parsed_chunk: dict[str, Any]) -> None:
+        event_type = parsed_chunk.get("type")
+        response_payload = parsed_chunk.get("response")
+        response_output = response_payload.get("output") if isinstance(response_payload, dict) else None
+        verbose_logger.debug(
+            "Responses streaming iterator raw terminal chunk model=%s custom_llm_provider=%s event_type=%s response_output_len=%s response_status=%s incomplete_details=%s error=%s response_id=%s raw_keys=%s",
+            self.model,
+            self.custom_llm_provider,
+            event_type,
+            len(response_output) if isinstance(response_output, list) else None,
+            response_payload.get("status") if isinstance(response_payload, dict) else None,
+            response_payload.get("incomplete_details") if isinstance(response_payload, dict) else None,
+            response_payload.get("error") if isinstance(response_payload, dict) else parsed_chunk.get("error"),
+            response_payload.get("id") if isinstance(response_payload, dict) else None,
+            sorted(parsed_chunk.keys()),
+        )
+
+    def _log_stream_end_without_completed_response(self) -> None:
+        verbose_logger.debug(
+            "Responses streaming iterator ended without terminal response model=%s custom_llm_provider=%s raw_sse_len=%s raw_sse_prefix=%r event_counts=%s",
+            self.model,
+            self.custom_llm_provider,
+            len(self._get_raw_sse_body() or ""),
+            (self._get_raw_sse_body() or "")[:200],
+            self._stream_event_counts,
+        )
+
     def _process_chunk(self, chunk) -> Optional[Any]:
         """Process a single chunk of data from the stream"""
         if not chunk:
             return None
+
+        if isinstance(chunk, str):
+            self._record_sse_chunk(chunk)
 
         # NOTE: ``SSEDecoder`` already strips the SSE ``data:`` field prefix, so
         # the value passed in here is the raw field content. Do not re-run
@@ -220,6 +309,28 @@ class BaseResponsesAPIStreamingIterator:
 
                 # Store the completed response (also for incomplete/failed so logging still fires)
                 _chunk_type = getattr(openai_responses_api_chunk, "type", None)
+                if _chunk_type in (
+                    ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+                    ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+                    ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                    ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                    ResponsesAPIStreamEvents.ERROR,
+                ):
+                    verbose_logger.debug(
+                        "Responses streaming iterator saw event model=%s custom_llm_provider=%s event_type=%s event_counts=%s",
+                        self.model,
+                        self.custom_llm_provider,
+                        _chunk_type,
+                        self._stream_event_counts,
+                    )
+                if _chunk_type in (
+                    ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                    ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                    ResponsesAPIStreamEvents.RESPONSE_FAILED,
+                    ResponsesAPIStreamEvents.ERROR,
+                ):
+                    self._log_raw_terminal_chunk(parsed_chunk)
                 openai_types = _get_openai_response_types()
                 if openai_responses_api_chunk and _chunk_type in (
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
@@ -244,8 +355,12 @@ class BaseResponsesAPIStreamingIterator:
                                     pass
 
                     if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED:
+                        self._persist_raw_sse_to_logging()
+                        self._log_terminal_event(str(_chunk_type))
                         self._handle_logging_failed_response()
                     else:
+                        self._persist_raw_sse_to_logging()
+                        self._log_terminal_event(str(_chunk_type))
                         self._handle_logging_completed_response()
 
                 return openai_responses_api_chunk
@@ -600,12 +715,18 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     sse = await self.stream_iterator.__anext__()
                 except StopAsyncIteration:
                     self.finished = True
+                    if self.completed_response is None:
+                        self._persist_raw_sse_to_logging()
+                        self._log_stream_end_without_completed_response()
                     raise StopAsyncIteration
 
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
 
                 if self.finished:
+                    if self.completed_response is None:
+                        self._persist_raw_sse_to_logging()
+                        self._log_stream_end_without_completed_response()
                     raise StopAsyncIteration
                 elif result is not None:
                     # Await hook directly instead of run_async_function
@@ -674,12 +795,18 @@ class SyncResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
                     sse = next(self.stream_iterator)
                 except StopIteration:
                     self.finished = True
+                    if self.completed_response is None:
+                        self._persist_raw_sse_to_logging()
+                        self._log_stream_end_without_completed_response()
                     raise StopIteration
 
                 self._check_max_streaming_duration()
                 result = self._process_chunk(sse.data)
 
                 if self.finished:
+                    if self.completed_response is None:
+                        self._persist_raw_sse_to_logging()
+                        self._log_stream_end_without_completed_response()
                     raise StopIteration
                 elif result is not None:
                     # Sync path: use run_async_function for the hook

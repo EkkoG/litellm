@@ -180,7 +180,16 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         logging_obj: Any,
     ):
         body_text = raw_response.text or ""
-        if not self._should_parse_as_sse(raw_response=raw_response, body_text=body_text):
+        should_parse_as_sse = self._should_parse_as_sse(raw_response=raw_response, body_text=body_text)
+        content_type = (raw_response.headers or {}).get("content-type", "")
+        verbose_logger.debug(
+            "ChatGPT transform_response_api_response content_type=%s should_parse_as_sse=%s body_len=%s body_prefix=%r",
+            content_type,
+            should_parse_as_sse,
+            len(body_text),
+            body_text[:200],
+        )
+        if not should_parse_as_sse:
             return super().transform_response_api_response(
                 model=model,
                 raw_response=raw_response,
@@ -190,6 +199,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         logging_obj.post_call(
             original_response=raw_response.text,
             additional_args={"complete_input_dict": {}},
+        )
+        verbose_logger.debug(
+            "ChatGPT stored raw SSE on logging object body_len=%s body_prefix=%r",
+            len(body_text),
+            body_text[:200],
         )
 
         completed_response, error_message = self._extract_completed_response_from_sse(body_text=body_text)

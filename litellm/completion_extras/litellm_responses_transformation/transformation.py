@@ -633,6 +633,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         cls._summarize_output_item_types(recovered_output),
                     )
                     return recovered_output
+                response_payload = parsed_chunk.get("response")
+                verbose_logger.debug(
+                    "Responses API SSE recovery saw response.completed without output event_counts=%s response_status=%s incomplete_details=%s error=%s response_id=%s",
+                    event_counts,
+                    response_payload.get("status") if isinstance(response_payload, dict) else None,
+                    response_payload.get("incomplete_details") if isinstance(response_payload, dict) else None,
+                    response_payload.get("error") if isinstance(response_payload, dict) else None,
+                    response_payload.get("id") if isinstance(response_payload, dict) else None,
+                )
                 continue
 
             if event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
@@ -674,6 +683,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def _recover_output_items_from_logging(cls, logging_obj: "LiteLLMLoggingObj") -> List[Dict[str, Any]]:
         model_call_details = getattr(logging_obj, "model_call_details", {}) or {}
         original_response = model_call_details.get("original_response")
+        verbose_logger.debug(
+            "Responses API recovery inspecting logging object original_response_present=%s original_response_type=%s original_response_len=%s original_response_prefix=%r",
+            original_response is not None,
+            type(original_response).__name__ if original_response is not None else None,
+            len(original_response) if isinstance(original_response, str) else None,
+            original_response[:200] if isinstance(original_response, str) else None,
+        )
         return cls._recover_output_items_from_raw_sse(original_response)
 
     def transform_response(

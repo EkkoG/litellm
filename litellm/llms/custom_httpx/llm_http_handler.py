@@ -2450,12 +2450,30 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
+        verbose_logger.debug(
+            "Responses HTTP handler transforming sync response model=%s custom_llm_provider=%s config_class=%s raw_response_type=%s status_code=%s content_type=%s body_len=%s body_prefix=%r",
+            model,
+            custom_llm_provider,
+            type(responses_api_provider_config).__name__,
+            type(response).__name__,
+            getattr(response, "status_code", None),
+            (getattr(response, "headers", {}) or {}).get("content-type"),
+            len(response.text) if isinstance(getattr(response, "text", None), str) else None,
+            response.text[:200] if isinstance(getattr(response, "text", None), str) else None,
+        )
         initial_response = responses_api_provider_config.transform_response_api_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
-
+        verbose_logger.debug(
+            "Responses HTTP handler transformed sync response model=%s custom_llm_provider=%s config_class=%s transformed_type=%s output_len=%s",
+            model,
+            custom_llm_provider,
+            type(responses_api_provider_config).__name__,
+            type(initial_response).__name__,
+            len(initial_response.output) if isinstance(initial_response, ResponsesAPIResponse) else None,
+        )
         if self._has_agentic_completion_hook(logging_obj):
             final_response = run_async_function(
                 self._call_agentic_completion_hooks,
@@ -2627,12 +2645,30 @@ class BaseLLMHTTPHandler:
                 provider_config=responses_api_provider_config,
             )
 
+        verbose_logger.debug(
+            "Responses HTTP handler transforming async response model=%s custom_llm_provider=%s config_class=%s raw_response_type=%s status_code=%s content_type=%s body_len=%s body_prefix=%r",
+            model,
+            custom_llm_provider,
+            type(responses_api_provider_config).__name__,
+            type(response).__name__,
+            getattr(response, "status_code", None),
+            (getattr(response, "headers", {}) or {}).get("content-type"),
+            len(response.text) if isinstance(getattr(response, "text", None), str) else None,
+            response.text[:200] if isinstance(getattr(response, "text", None), str) else None,
+        )
         initial_response = responses_api_provider_config.transform_response_api_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,
         )
-
+        verbose_logger.debug(
+            "Responses HTTP handler transformed async response model=%s custom_llm_provider=%s config_class=%s transformed_type=%s output_len=%s",
+            model,
+            custom_llm_provider,
+            type(responses_api_provider_config).__name__,
+            type(initial_response).__name__,
+            len(initial_response.output) if isinstance(initial_response, ResponsesAPIResponse) else None,
+        )
         final_response = await self._call_agentic_completion_hooks(
             response=initial_response,
             model=model,

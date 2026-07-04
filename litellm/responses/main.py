@@ -1000,6 +1000,13 @@ def responses(
                 model=model,
                 provider=custom_llm_provider,
             )
+        verbose_logger.debug(
+            "responses() selected provider config model=%s custom_llm_provider=%s config_class=%s use_chat_completions_api=%s",
+            model,
+            custom_llm_provider,
+            type(responses_api_provider_config).__name__ if responses_api_provider_config is not None else None,
+            use_chat_completions_api,
+        )
 
         local_vars.update(kwargs)
         # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
