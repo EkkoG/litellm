@@ -100,4 +100,24 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.custom_llm_provider).toBe("chatgpt");
     expect(deployment.litellmParamsObj.litellm_credential_name).toBe("chatgpt-admin");
   });
+
+  it("stores responses mode in model_info", async () => {
+    const formValues = {
+      model_mappings: [
+        {
+          public_name: "Responses Model",
+          litellm_model: "openai/gpt-5.5",
+        },
+      ],
+      model_name: "responses-model",
+      mode: "responses",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.modelInfoObj.mode).toBe("responses");
+    expect(deployment.litellmParamsObj).not.toHaveProperty("mode");
+  });
 });

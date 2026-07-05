@@ -187,6 +187,20 @@ describe("AddModelForm", () => {
     expect(await screen.findByRole("heading", { name: "Add Model" })).toBeInTheDocument();
   });
 
+  it("should show responses in the mode options", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+
+    const props = createTestProps();
+
+    renderWithProviders(<AddModelForm {...props} />);
+
+    const modeSelect = await screen.findByLabelText("Mode");
+    await userEvent.click(modeSelect);
+
+    expect(await screen.findByText("Responses - /responses")).toBeInTheDocument();
+  });
+
   it("should show proxy admin only (not team admin) - should not see Select Team dropdown unless switch is toggled", async () => {
     const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
     mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
