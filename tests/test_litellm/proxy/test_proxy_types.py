@@ -139,3 +139,11 @@ def test_key_request_router_settings_keeps_enable_tag_filtering():
     dumped = req.router_settings.model_dump(exclude_none=True)
     assert dumped["enable_tag_filtering"] is True
     assert dumped["num_retries"] == 2
+
+
+def test_model_info_accepts_responses_mode():
+    from litellm.proxy._types import ModelInfo
+
+    model_info = ModelInfo(mode="responses")
+
+    assert model_info.mode == "responses"
