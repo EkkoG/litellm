@@ -933,7 +933,7 @@ class ModelInfoDelete(LiteLLMPydanticObjectBase):
 
 class ModelInfo(LiteLLMPydanticObjectBase):
     id: Optional[str]
-    mode: Optional[Literal["embedding", "chat", "completion"]]
+    mode: Optional[Literal["embedding", "chat", "completion", "responses"]]
     input_cost_per_token: Optional[float] = 0.0
     output_cost_per_token: Optional[float] = 0.0
     max_tokens: Optional[int] = 2048  # assume 2048 if not set

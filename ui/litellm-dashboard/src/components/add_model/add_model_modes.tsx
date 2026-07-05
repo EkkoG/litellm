@@ -1,6 +1,7 @@
 // Define the available test modes
 export const TEST_MODES = [
   { value: "chat", label: "Chat - /chat/completions" },
+  { value: "responses", label: "Responses - /responses" },
   { value: "completion", label: "Completion - /completions" },
   { value: "embedding", label: "Embedding - /embeddings" },
   { value: "audio_speech", label: "Audio Speech - /audio/speech" },

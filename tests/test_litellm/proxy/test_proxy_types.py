@@ -124,3 +124,11 @@ def test_proxy_exception_str_returns_message():
         "param": "key",
         "code": "401",
     }
+
+
+def test_model_info_accepts_responses_mode():
+    from litellm.proxy._types import ModelInfo
+
+    model_info = ModelInfo(mode="responses")
+
+    assert model_info.mode == "responses"
