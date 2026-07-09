@@ -3,6 +3,8 @@ import types
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+
+import litellm.proxy.auth.ldap_auth as ldap_auth
 from litellm.proxy._types import LitellmUserRoles
 from litellm.proxy.auth.ldap_auth import (
     LDAPConfig,
@@ -68,6 +70,91 @@ async def test_sync_ldap_user_serializes_metadata_for_prisma():
     data = mock_prisma.db.litellm_usertable.upsert.call_args.kwargs["data"]
     assert data["create"]["metadata"] == '{"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com"}'
     assert data["update"]["metadata"] == '{"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com"}'
+    assert data["create"]["user_role"] == "internal_user"
+    assert "user_role" not in data["update"]
+
+
+@pytest.mark.asyncio
+async def test_sync_ldap_user_updates_role_when_admin_group_configured():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock(
+        return_value={
+            "user_id": "ldap:alice@example.com",
+            "user_email": "alice@example.com",
+            "user_role": LitellmUserRoles.PROXY_ADMIN,
+            "user_alias": "Alice",
+            "metadata": {"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com"},
+        }
+    )
+
+    await _sync_ldap_user(
+        mock_prisma,
+        LDAPDirectoryUser(
+            username="alice",
+            dn="uid=alice,dc=example,dc=com",
+            email="alice@example.com",
+            display_name="Alice",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+        sync_user_role=True,
+    )
+
+    data = mock_prisma.db.litellm_usertable.upsert.call_args.kwargs["data"]
+    assert data["create"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
+    assert data["update"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "ldap_admin_group_dn,expected_sync_user_role",
+    [
+        (None, False),
+        ("cn=litellm-admins,ou=Groups,dc=example,dc=com", True),
+    ],
+)
+async def test_authenticate_ldap_user_syncs_role_only_when_admin_group_configured(
+    monkeypatch,
+    ldap_admin_group_dn,
+    expected_sync_user_role,
+):
+    mock_prisma = MagicMock()
+    directory_user = LDAPDirectoryUser(
+        username="alice",
+        dn="uid=alice,dc=example,dc=com",
+        email="alice@example.com",
+        display_name="Alice",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    synced_user = MagicMock()
+
+    monkeypatch.setattr(
+        ldap_auth,
+        "load_ldap_config",
+        AsyncMock(
+            return_value=LDAPConfig(
+                ldap_enabled=True,
+                ldap_url="ldaps://ldap.example.com:636",
+                ldap_base_dn="dc=example,dc=com",
+                ldap_admin_group_dn=ldap_admin_group_dn,
+            )
+        ),
+    )
+    monkeypatch.setattr(ldap_auth, "_authenticate_ldap_credentials", MagicMock(return_value=directory_user))
+    sync_mock = AsyncMock(return_value=synced_user)
+    monkeypatch.setattr(ldap_auth, "_sync_ldap_user", sync_mock)
+
+    result = await ldap_auth.authenticate_ldap_user(
+        username="alice",
+        password="ldap-password",
+        prisma_client=mock_prisma,
+    )
+
+    assert result == synced_user
+    sync_mock.assert_awaited_once_with(
+        prisma_client=mock_prisma,
+        directory_user=directory_user,
+        sync_user_role=expected_sync_user_role,
+    )
 
 
 @pytest.mark.asyncio
