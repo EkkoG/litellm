@@ -216,21 +216,27 @@ def _authenticate_ldap_credentials(
     )
 
 
-async def _sync_ldap_user(prisma_client: PrismaClient, directory_user: LDAPDirectoryUser) -> LiteLLM_UserTable:
+async def _sync_ldap_user(
+    prisma_client: PrismaClient,
+    directory_user: LDAPDirectoryUser,
+    sync_user_role: bool = False,
+) -> LiteLLM_UserTable:
     ldap_metadata = json.dumps({"auth_provider": "ldap", "ldap_dn": directory_user.dn})
     create_data = get_new_internal_user_defaults(
         user_id=directory_user.user_id,
         user_email=directory_user.email,
     )
-    create_data["user_role"] = directory_user.user_role
+    if sync_user_role:
+        create_data["user_role"] = directory_user.user_role
     create_data["user_alias"] = directory_user.display_name or directory_user.username
     create_data["metadata"] = ldap_metadata
 
     update_data: Dict[str, Any] = {
-        "user_role": directory_user.user_role,
         "user_alias": directory_user.display_name or directory_user.username,
         "metadata": ldap_metadata,
     }
+    if sync_user_role:
+        update_data["user_role"] = directory_user.user_role
     if directory_user.email is not None:
         update_data["user_email"] = directory_user.email
 
@@ -288,4 +294,8 @@ async def authenticate_ldap_user(
             code=401,
         )
 
-    return await _sync_ldap_user(prisma_client, directory_user)
+    return await _sync_ldap_user(
+        prisma_client=prisma_client,
+        directory_user=directory_user,
+        sync_user_role=bool(config.ldap_admin_group_dn),
+    )
