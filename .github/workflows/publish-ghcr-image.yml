@@ -20,7 +20,7 @@ on:
       platforms:
         description: "Comma-separated target platforms"
         required: false
-        default: linux/amd64,linux/arm64
+        default: linux/arm64
         type: string
 
 permissions:
