@@ -107,6 +107,7 @@ class TestChatGPTResponsesAPITransformation:
         assert request["stream"] is True
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+        assert config.force_streaming_request() is True
 
     def test_chatgpt_converts_string_input_to_responses_input_list(self):
         config = ChatGPTResponsesAPIConfig()
