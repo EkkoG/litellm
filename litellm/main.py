@@ -973,8 +973,14 @@ def responses_api_bridge_check(
     tools: Optional[List[Any]] = None,
     reasoning_effort: Optional[Any] = None,
     reasoning_summary: Optional[Any] = None,
+    model_info_override: Optional[Dict[str, Any]] = None,
 ) -> Tuple[dict, str]:
     model_info: Dict[str, Any] = {}
+
+    if model_info_override and model_info_override.get("mode") == "responses":
+        model = model.replace("responses/", "")
+        model_info["mode"] = "responses"
+        return model_info, model
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
     # Returns early with minimal model_info; callers only inspect the "mode" key.
@@ -5127,6 +5133,7 @@ def completion(  # type: ignore
             model=model,
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
+            model_info_override=kwargs.get("model_info"),
         )
 
         if not _should_allow_input_examples(custom_llm_provider=custom_llm_provider, model=model):
@@ -5366,6 +5373,7 @@ def completion(  # type: ignore
                 tools=tools,
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
+                model_info_override=kwargs.get("model_info"),
             )
 
         # Use base_model (the true underlying model) for Azure model-type
