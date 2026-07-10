@@ -741,6 +741,38 @@ def test_responses_api_bridge_check_strips_responses_prefix():
         assert model_info["mode"] == "responses"
 
 
+def test_responses_api_bridge_check_uses_model_info_override():
+    from litellm.main import responses_api_bridge_check
+
+    with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
+        model_info, model = responses_api_bridge_check(
+            model="custom-chatgpt-model",
+            custom_llm_provider="chatgpt",
+            model_info_override={"mode": "responses"},
+        )
+
+        mock_get_model_info.assert_not_called()
+        assert model == "custom-chatgpt-model"
+        assert model_info["mode"] == "responses"
+
+
+def test_completion_bridges_deployment_responses_mode_for_custom_chatgpt_model():
+    from litellm.completion_extras import responses_api_bridge
+
+    sentinel = MagicMock()
+    with patch.object(responses_api_bridge, "completion", return_value=sentinel) as mock_bridge:
+        response = litellm.completion(
+            model="custom-chatgpt-model",
+            custom_llm_provider="chatgpt",
+            messages=[{"role": "user", "content": "hi"}],
+            model_info={"mode": "responses"},
+            api_key="test-key",
+        )
+
+        assert response is sentinel
+        mock_bridge.assert_called_once()
+
+
 def test_responses_api_bridge_check_gpt_5_4_pro():
     """Test that gpt-5.4-pro routes through responses API bridge, not chat completions.
 
