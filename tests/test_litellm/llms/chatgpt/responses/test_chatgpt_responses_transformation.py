@@ -94,7 +94,7 @@ class TestChatGPTResponsesAPITransformation:
             "chatgpt/gpt-5.3-codex",
         ],
     )
-    def test_chatgpt_forces_streaming_and_reasoning_include(self, model_name):
+    def test_chatgpt_forces_streaming_without_fake_stream_and_reasoning_include(self, model_name):
         config = ChatGPTResponsesAPIConfig()
         request = config.transform_responses_api_request(
             model=model_name,
@@ -107,7 +107,7 @@ class TestChatGPTResponsesAPITransformation:
         assert request["stream"] is True
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
-        assert config.force_streaming_request() is True
+        assert config.should_fake_stream(model=model_name, stream=True, custom_llm_provider="chatgpt") is False
 
     def test_chatgpt_converts_string_input_to_responses_input_list(self):
         config = ChatGPTResponsesAPIConfig()

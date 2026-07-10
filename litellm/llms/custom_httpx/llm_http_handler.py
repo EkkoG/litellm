@@ -2401,11 +2401,6 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
-        force_streaming_request = getattr(responses_api_provider_config, "force_streaming_request", None)
-        force_streaming_request_value = callable(force_streaming_request) and force_streaming_request() is True
-        if force_streaming_request_value:
-            data["stream"] = True
-            fake_stream = False
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2583,11 +2578,6 @@ class BaseLLMHTTPHandler:
 
         if extra_body:
             data.update(extra_body)
-        force_streaming_request = getattr(responses_api_provider_config, "force_streaming_request", None)
-        force_streaming_request_value = callable(force_streaming_request) and force_streaming_request() is True
-        if force_streaming_request_value:
-            data["stream"] = True
-            fake_stream = False
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming

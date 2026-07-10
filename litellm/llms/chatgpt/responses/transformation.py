@@ -367,5 +367,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """ChatGPT does not support native WebSocket for Responses API"""
         return False
 
-    def force_streaming_request(self) -> bool:
-        return True
+    def should_fake_stream(
+        self,
+        model: Optional[str],
+        stream: Optional[bool],
+        custom_llm_provider: Optional[str] = None,
+    ) -> bool:
+        return False
