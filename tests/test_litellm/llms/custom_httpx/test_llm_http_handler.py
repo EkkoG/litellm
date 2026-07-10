@@ -1352,7 +1352,7 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     assert "stream" in post_kwargs
 
 
-def test_responses_handler_force_streaming_request_after_extra_body():
+def test_responses_handler_force_streaming_request_after_extra_body_and_fake_stream():
     provider_config = Mock()
     provider_config.validate_environment.return_value = {}
     provider_config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
@@ -1383,6 +1383,7 @@ def test_responses_handler_force_streaming_request_after_extra_body():
         client=mock_client,
         extra_body={"stream": False},
         _is_async=False,
+        fake_stream=True,
     )
 
     post_kwargs = mock_client.post.call_args.kwargs
@@ -1391,7 +1392,7 @@ def test_responses_handler_force_streaming_request_after_extra_body():
 
 
 @pytest.mark.asyncio
-async def test_async_responses_handler_force_streaming_request_after_extra_body():
+async def test_async_responses_handler_force_streaming_request_after_extra_body_and_fake_stream():
     provider_config = Mock()
     provider_config.validate_environment.return_value = {}
     provider_config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
@@ -1423,6 +1424,7 @@ async def test_async_responses_handler_force_streaming_request_after_extra_body(
         logging_obj=Mock(),
         client=mock_client,
         extra_body={"stream": False},
+        fake_stream=True,
     )
 
     post_kwargs = mock_client.post.call_args.kwargs
