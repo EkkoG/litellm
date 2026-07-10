@@ -1493,6 +1493,84 @@ def test_responses_handler_signs_after_fake_stream_prep_strips_stream():
     assert "stream" in post_kwargs
 
 
+def test_responses_handler_force_streaming_request_after_extra_body():
+    provider_config = Mock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    provider_config.transform_responses_api_request.return_value = {
+        "model": "gpt-5.6-terra",
+        "input": "hi",
+        "stream": True,
+    }
+    provider_config.force_streaming_request.return_value = True
+    provider_config.should_fake_stream.return_value = False
+    provider_config.sign_request.return_value = ({}, None)
+
+    mock_client = Mock(spec=HTTPHandler)
+    mock_client.post.return_value = httpx.Response(
+        200,
+        request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+    )
+
+    handler = BaseLLMHTTPHandler()
+    handler.response_api_handler(
+        model="gpt-5.6-terra",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={"stream": False},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=mock_client,
+        extra_body={"stream": False},
+        _is_async=False,
+    )
+
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert post_kwargs["json"]["stream"] is True
+    assert post_kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_async_responses_handler_force_streaming_request_after_extra_body():
+    provider_config = Mock()
+    provider_config.validate_environment.return_value = {}
+    provider_config.get_complete_url.return_value = "https://chatgpt.example.com/responses"
+    provider_config.transform_responses_api_request.return_value = {
+        "model": "gpt-5.6-terra",
+        "input": "hi",
+        "stream": True,
+    }
+    provider_config.force_streaming_request.return_value = True
+    provider_config.should_fake_stream.return_value = False
+    provider_config.sign_request.return_value = ({}, None)
+
+    mock_client = AsyncMock(spec=AsyncHTTPHandler)
+    mock_client.post = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=httpx.Request("POST", "https://chatgpt.example.com/responses"),
+        )
+    )
+
+    handler = BaseLLMHTTPHandler()
+    await handler.async_response_api_handler(
+        model="gpt-5.6-terra",
+        input="hi",
+        responses_api_provider_config=provider_config,
+        response_api_optional_request_params={"stream": False},
+        custom_llm_provider="chatgpt",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(),
+        client=mock_client,
+        extra_body={"stream": False},
+    )
+
+    post_kwargs = mock_client.post.call_args.kwargs
+    assert post_kwargs["json"]["stream"] is True
+    assert post_kwargs["stream"] is True
+
+
 def _make_compact_handler_call(signed_body, is_async):
     """Drive (async_)compact_response_api_handler with a fully mocked provider config
     + client, returning the kwargs the client.post was called with.
