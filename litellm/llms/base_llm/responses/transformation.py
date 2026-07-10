@@ -62,9 +62,6 @@ class BaseResponsesAPIConfig(ABC):
         """
         return False
 
-    def force_streaming_request(self) -> bool:
-        return False
-
     def sign_request(
         self,
         headers: dict,
