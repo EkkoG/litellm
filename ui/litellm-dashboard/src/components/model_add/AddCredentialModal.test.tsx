@@ -130,4 +130,23 @@ describe("AddCredentialModal", () => {
     expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument();
     expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
   });
+
+  it("should render GitHub Copilot device login for the provider dropdown value", async () => {
+    const queryClient = createQueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <AddCredentialModal
+          open={true}
+          onCancel={vi.fn()}
+          onAddCredential={vi.fn()}
+          uploadProps={mockUploadProps}
+          initialProvider={"GITHUB_COPILOT" as Providers}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Credential" })).not.toBeInTheDocument();
+  });
 });
