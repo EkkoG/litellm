@@ -20,8 +20,14 @@ DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
 def get_github_copilot_access_token(litellm_params: object) -> Optional[str]:
     if isinstance(litellm_params, Mapping):
         value = litellm_params.get("github_copilot_access_token")
+        credential_name = litellm_params.get("litellm_credential_name")
     else:
         value = getattr(litellm_params, "github_copilot_access_token", None)
+        credential_name = getattr(litellm_params, "litellm_credential_name", None)
+    if not value and isinstance(credential_name, str) and credential_name:
+        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+        value = CredentialAccessor.get_credential_values(credential_name).get("github_copilot_access_token")
     return value if isinstance(value, str) and value else None
 
 
