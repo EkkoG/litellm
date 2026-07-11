@@ -70,7 +70,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         # double-slash URL once "/v1/messages" is appended downstream.
         dynamic_api_base = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
         try:
-            dynamic_api_key = self.authenticator.get_api_key()
+            dynamic_api_key = self.authenticator.get_api_key(api_key)
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,

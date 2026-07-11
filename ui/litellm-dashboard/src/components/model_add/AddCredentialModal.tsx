@@ -7,6 +7,7 @@ import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
 import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 import ChatGPTCredentialDeviceLogin from "./ChatGPTCredentialDeviceLogin";
+import GitHubCopilotCredentialDeviceLogin from "./GitHubCopilotCredentialDeviceLogin";
 const { Link } = Typography;
 
 interface AddCredentialsModalProps {
@@ -29,6 +30,28 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(initialProvider);
   const credentialName = Form.useWatch("credential_name", form);
+
+  const renderCredentialFields = () => {
+    if (selectedProvider === Providers.ChatGPT) {
+      return (
+        <ChatGPTCredentialDeviceLogin
+          credentialName={credentialName}
+          overwriteExisting={false}
+          onComplete={onChatGPTCredentialCreated}
+        />
+      );
+    }
+    if (selectedProvider === Providers.GITHUB_COPILOT) {
+      return (
+        <GitHubCopilotCredentialDeviceLogin
+          credentialName={credentialName}
+          overwriteExisting={false}
+          onComplete={onChatGPTCredentialCreated}
+        />
+      );
+    }
+    return <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />;
+  };
 
   const handleSubmit = (values: any) => {
     const filteredValues = Object.entries(values).reduce((acc, [key, value]) => {
@@ -106,15 +129,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
           </AntdSelect>
         </Form.Item>
 
-        {selectedProvider === Providers.ChatGPT ? (
-          <ChatGPTCredentialDeviceLogin
-            credentialName={credentialName}
-            overwriteExisting={false}
-            onComplete={onChatGPTCredentialCreated}
-          />
-        ) : (
-          <ProviderSpecificFields selectedProvider={selectedProvider} uploadProps={uploadProps} />
-        )}
+        {renderCredentialFields()}
 
         {/* Modal Footer */}
         <div className="flex justify-between items-center">
@@ -132,7 +147,9 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
             >
               Cancel
             </Button>
-            {selectedProvider !== Providers.ChatGPT && <Button htmlType="submit">{"Add Credential"}</Button>}
+            {selectedProvider !== Providers.ChatGPT && selectedProvider !== Providers.GITHUB_COPILOT && (
+              <Button htmlType="submit">{"Add Credential"}</Button>
+            )}
           </div>
         </div>
       </Form>

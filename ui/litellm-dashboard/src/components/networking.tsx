@@ -2605,6 +2605,21 @@ export const chatgptCredentialDevicePollCall = async (
   }
 };
 
+export const githubCopilotCredentialDeviceStartCall = async (
+  accessToken: string,
+  formValues: { credential_name: string; overwrite_existing?: boolean },
+) =>
+  apiClient.post(`/credentials/github_copilot/device/start`, {
+    accessToken,
+    body: formValues,
+  });
+
+export const githubCopilotCredentialDevicePollCall = async (accessToken: string, formValues: { login_id: string }) =>
+  apiClient.post(`/credentials/github_copilot/device/poll`, {
+    accessToken,
+    body: formValues,
+  });
+
 export const credentialListCall = async (accessToken: string) => {
   /**
    * Get all available teams on proxy
