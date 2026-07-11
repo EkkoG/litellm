@@ -30,6 +30,8 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   const [form] = Form.useForm();
   const [selectedProvider, setSelectedProvider] = useState<Providers>(initialProvider);
   const credentialName = Form.useWatch("credential_name", form);
+  const isGitHubCopilot =
+    selectedProvider === Providers.GITHUB_COPILOT || selectedProvider === ("GITHUB_COPILOT" as Providers);
 
   const renderCredentialFields = () => {
     if (selectedProvider === Providers.ChatGPT) {
@@ -41,7 +43,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
         />
       );
     }
-    if (selectedProvider === Providers.GITHUB_COPILOT) {
+    if (isGitHubCopilot) {
       return (
         <GitHubCopilotCredentialDeviceLogin
           credentialName={credentialName}
@@ -147,7 +149,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
             >
               Cancel
             </Button>
-            {selectedProvider !== Providers.ChatGPT && selectedProvider !== Providers.GITHUB_COPILOT && (
+            {selectedProvider !== Providers.ChatGPT && !isGitHubCopilot && (
               <Button htmlType="submit">{"Add Credential"}</Button>
             )}
           </div>
