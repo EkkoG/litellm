@@ -32,6 +32,7 @@ export default function LDAPSettings() {
       ldap_enabled: Boolean(values.ldap_enabled),
       ldap_use_ssl: Boolean(values.ldap_use_ssl),
       ldap_start_tls: Boolean(values.ldap_start_tls),
+      ldap_allow_insecure: Boolean(values.ldap_allow_insecure),
     };
     if (!payload.ldap_bind_password) {
       delete payload.ldap_bind_password;
@@ -79,6 +80,7 @@ export default function LDAPSettings() {
             ldap_group_attribute: "memberOf",
             ldap_use_ssl: false,
             ldap_start_tls: false,
+            ldap_allow_insecure: false,
           }}
         >
           <Form.Item name="ldap_enabled" label="Enabled" valuePropName="checked">
@@ -110,6 +112,13 @@ export default function LDAPSettings() {
             <Input />
           </Form.Item>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <Form.Item
+              name="ldap_user_id_attribute"
+              label="Stable User ID Attribute"
+              extra="Use an immutable value such as objectGUID or entryUUID. Defaults to the LDAP DN."
+            >
+              <Input placeholder="objectGUID" />
+            </Form.Item>
             <Form.Item name="ldap_email_attribute" label="Email Attribute">
               <Input />
             </Form.Item>
@@ -128,6 +137,9 @@ export default function LDAPSettings() {
               <Switch />
             </Form.Item>
             <Form.Item name="ldap_start_tls" label="StartTLS" valuePropName="checked">
+              <Switch />
+            </Form.Item>
+            <Form.Item name="ldap_allow_insecure" label="Allow Insecure LDAP" valuePropName="checked">
               <Switch />
             </Form.Item>
           </Space>

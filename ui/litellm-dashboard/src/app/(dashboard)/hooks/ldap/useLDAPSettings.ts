@@ -21,12 +21,14 @@ export interface LDAPSettingsValues {
   ldap_bind_dn: string | null;
   ldap_bind_password: string | null;
   ldap_user_search_filter: string;
+  ldap_user_id_attribute: string | null;
   ldap_email_attribute: string;
   ldap_display_name_attribute: string;
   ldap_group_attribute: string;
   ldap_admin_group_dn: string | null;
   ldap_use_ssl: boolean;
   ldap_start_tls: boolean;
+  ldap_allow_insecure: boolean;
 }
 
 export interface LDAPSettingsResponse {

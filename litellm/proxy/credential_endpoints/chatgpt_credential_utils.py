@@ -1,13 +1,14 @@
 import asyncio
 from typing import Any, Optional
 
+from litellm._logging import verbose_proxy_logger
 from litellm.llms.chatgpt.authenticator import Authenticator
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
-from litellm.proxy.utils import jsonify_object
+from litellm.proxy.credential_endpoints.credential_writer import CredentialNotFound, CredentialWriter
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CredentialItem
 
 CHATGPT_CREDENTIAL_PROVIDER = "chatgpt"
+_BACKGROUND_CREDENTIAL_TASKS: set[asyncio.Task[None]] = set()
 
 
 def build_chatgpt_credential_values(tokens: dict[str, str], api_base: Optional[str] = None) -> dict[str, str]:
@@ -74,9 +75,20 @@ def _schedule_chatgpt_credential_persist(
     )
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(coroutine)
+        task = loop.create_task(coroutine)
+        _BACKGROUND_CREDENTIAL_TASKS.add(task)
+        task.add_done_callback(_handle_credential_persist_result)
     except RuntimeError:
         asyncio.run(coroutine)
+
+
+def _handle_credential_persist_result(task: asyncio.Task[None]) -> None:
+    _BACKGROUND_CREDENTIAL_TASKS.discard(task)
+    if task.cancelled():
+        return
+    exception = task.exception()
+    if exception is not None:
+        verbose_proxy_logger.error("Failed to persist refreshed ChatGPT credential: %s", exception)
 
 
 async def _persist_chatgpt_credential_values(
@@ -85,14 +97,14 @@ async def _persist_chatgpt_credential_values(
     credential_values: dict[str, Any],
     user_id: Optional[str],
 ) -> None:
-    encrypted_values = {key: encrypt_value_helper(value) for key, value in credential_values.items()}
-    data = jsonify_object(
-        {
-            "credential_values": encrypted_values,
-            "updated_by": user_id or "litellm_proxy",
-        }
-    )
-    await CredentialsRepository(prisma_client).update_by_name(
+    result = await CredentialWriter(CredentialsRepository(prisma_client)).patch(
         credential_name=credential_name,
-        data=data,
+        patch=CredentialItem(
+            credential_name=credential_name,
+            credential_values=credential_values,
+            credential_info={},
+        ),
+        actor_id=user_id or "litellm_proxy",
     )
+    if isinstance(result, CredentialNotFound):
+        raise ValueError(f"Credential not found: {credential_name}")

@@ -1,6 +1,7 @@
 import json
 import os
 from dataclasses import dataclass, field
+from hashlib import sha256
 from typing import Any, Dict, List, Optional
 
 from pydantic import Field
@@ -29,6 +30,10 @@ class LDAPConfig(LiteLLMPydanticObjectBase):
         description="LDAP user search filter. The {username} placeholder is escaped before use",
     )
     ldap_email_attribute: str = Field(default="mail", description="LDAP attribute used as the LiteLLM user email")
+    ldap_user_id_attribute: Optional[str] = Field(
+        default=None,
+        description="Immutable LDAP attribute used as the LiteLLM identity, for example objectGUID or entryUUID",
+    )
     ldap_display_name_attribute: str = Field(
         default="displayName",
         description="LDAP attribute used as the LiteLLM user display name",
@@ -40,6 +45,10 @@ class LDAPConfig(LiteLLMPydanticObjectBase):
     )
     ldap_use_ssl: bool = Field(default=False, description="Connect to LDAP with SSL")
     ldap_start_tls: bool = Field(default=False, description="Upgrade LDAP connection with StartTLS before bind")
+    ldap_allow_insecure: bool = Field(
+        default=False,
+        description="Allow LDAP bind without SSL or StartTLS. Not recommended outside isolated development environments",
+    )
 
 
 @dataclass
@@ -48,13 +57,23 @@ class LDAPDirectoryUser:
     dn: str
     email: Optional[str]
     display_name: Optional[str]
+    principal_id: Optional[str] = None
     groups: List[str] = field(default_factory=list)
     user_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER
 
     @property
+    def principal_hash(self) -> str:
+        normalized_principal = (self.principal_id or self.dn).strip().casefold()
+        return sha256(normalized_principal.encode("utf-8")).hexdigest()
+
+    @property
     def user_id(self) -> str:
+        return f"ldap:{self.principal_hash}"
+
+    @property
+    def legacy_user_id(self) -> str:
         identifier = self.email or self.username
-        return f"ldap:{identifier.lower()}"
+        return f"ldap:{identifier.casefold()}"
 
 
 def _parse_bool(value: Optional[str], default: bool = False) -> bool:
@@ -77,11 +96,13 @@ def _load_ldap_config_from_env() -> LDAPConfig:
             "(|(uid={username})(sAMAccountName={username})(userPrincipalName={username}))",
         ),
         ldap_email_attribute=os.getenv("LDAP_EMAIL_ATTRIBUTE", "mail"),
+        ldap_user_id_attribute=os.getenv("LDAP_USER_ID_ATTRIBUTE"),
         ldap_display_name_attribute=os.getenv("LDAP_DISPLAY_NAME_ATTRIBUTE", "displayName"),
         ldap_group_attribute=os.getenv("LDAP_GROUP_ATTRIBUTE", "memberOf"),
         ldap_admin_group_dn=os.getenv("LDAP_ADMIN_GROUP_DN"),
         ldap_use_ssl=_parse_bool(os.getenv("LDAP_USE_SSL"), default=False),
         ldap_start_tls=_parse_bool(os.getenv("LDAP_START_TLS"), default=False),
+        ldap_allow_insecure=_parse_bool(os.getenv("LDAP_ALLOW_INSECURE"), default=False),
     )
 
 
@@ -140,6 +161,13 @@ def _authenticate_ldap_credentials(
     username: str,
     password: str,
 ) -> Optional[LDAPDirectoryUser]:
+    if not config.ldap_allow_insecure and not config.ldap_use_ssl and not config.ldap_start_tls:
+        raise ProxyException(
+            message="LDAP authentication requires SSL or StartTLS unless insecure LDAP is explicitly enabled.",
+            type=ProxyErrorTypes.auth_error,
+            param="ldap_allow_insecure",
+            code=400,
+        )
     try:
         from ldap3 import NONE, SUBTREE, Connection, Server
         from ldap3.utils.conv import escape_filter_chars
@@ -174,6 +202,7 @@ def _authenticate_ldap_credentials(
             config.ldap_email_attribute,
             config.ldap_display_name_attribute,
             config.ldap_group_attribute,
+            *([config.ldap_user_id_attribute] if config.ldap_user_id_attribute else []),
         }
     )
 
@@ -193,6 +222,9 @@ def _authenticate_ldap_credentials(
     email = _entry_first_value(entry, config.ldap_email_attribute)
     display_name = _entry_first_value(entry, config.ldap_display_name_attribute)
     groups = _entry_values(entry, config.ldap_group_attribute)
+    principal_id = (
+        _entry_first_value(entry, config.ldap_user_id_attribute) if config.ldap_user_id_attribute else user_dn
+    )
     bind_conn.unbind()
 
     user_conn = Connection(server, user=user_dn, password=password, auto_bind=False)
@@ -203,7 +235,8 @@ def _authenticate_ldap_credentials(
     user_conn.unbind()
 
     user_role = LitellmUserRoles.INTERNAL_USER
-    if config.ldap_admin_group_dn and config.ldap_admin_group_dn in groups:
+    normalized_groups = frozenset(group.strip().casefold() for group in groups)
+    if config.ldap_admin_group_dn and config.ldap_admin_group_dn.strip().casefold() in normalized_groups:
         user_role = LitellmUserRoles.PROXY_ADMIN
 
     return LDAPDirectoryUser(
@@ -211,9 +244,35 @@ def _authenticate_ldap_credentials(
         dn=user_dn,
         email=email,
         display_name=display_name,
+        principal_id=principal_id,
         groups=groups,
         user_role=user_role,
     )
+
+
+async def _resolve_ldap_user_id(
+    user_repository: UserRepository,
+    directory_user: LDAPDirectoryUser,
+) -> str:
+    stable_user = await user_repository.table.find_unique(where={"user_id": directory_user.user_id})
+    if stable_user is not None:
+        return str(getattr(stable_user, "user_id", None) or stable_user["user_id"])
+
+    legacy_user = await user_repository.table.find_unique(where={"user_id": directory_user.legacy_user_id})
+    if legacy_user is not None:
+        return str(getattr(legacy_user, "user_id", None) or legacy_user["user_id"])
+
+    metadata_user = await user_repository.table.find_first(
+        where={
+            "OR": [
+                {"metadata": {"path": ["ldap_principal_hash"], "equals": directory_user.principal_hash}},
+                {"metadata": {"path": ["ldap_dn"], "equals": directory_user.dn}},
+            ]
+        }
+    )
+    if metadata_user is not None:
+        return str(getattr(metadata_user, "user_id", None) or metadata_user["user_id"])
+    return directory_user.user_id
 
 
 async def _sync_ldap_user(
@@ -221,9 +280,17 @@ async def _sync_ldap_user(
     directory_user: LDAPDirectoryUser,
     sync_user_role: bool = False,
 ) -> LiteLLM_UserTable:
-    ldap_metadata = json.dumps({"auth_provider": "ldap", "ldap_dn": directory_user.dn})
+    user_repository = UserRepository(prisma_client)
+    resolved_user_id = await _resolve_ldap_user_id(user_repository, directory_user)
+    ldap_metadata = json.dumps(
+        {
+            "auth_provider": "ldap",
+            "ldap_dn": directory_user.dn,
+            "ldap_principal_hash": directory_user.principal_hash,
+        }
+    )
     create_data = get_new_internal_user_defaults(
-        user_id=directory_user.user_id,
+        user_id=resolved_user_id,
         user_email=directory_user.email,
     )
     if sync_user_role:
@@ -240,9 +307,8 @@ async def _sync_ldap_user(
     if directory_user.email is not None:
         update_data["user_email"] = directory_user.email
 
-    user_repository = UserRepository(prisma_client)
     row = await user_repository.table.upsert(
-        where={"user_id": directory_user.user_id},
+        where={"user_id": resolved_user_id},
         data={
             "create": create_data,
             "update": update_data,
