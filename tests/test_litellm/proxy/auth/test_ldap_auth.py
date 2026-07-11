@@ -1,11 +1,13 @@
 import sys
 import types
+from hashlib import sha256
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm.proxy.auth.ldap_auth as ldap_auth
 from litellm.proxy._types import LitellmUserRoles
+from litellm.proxy._types import ProxyException
 from litellm.proxy.auth.ldap_auth import (
     LDAPConfig,
     LDAPDirectoryUser,
@@ -47,6 +49,8 @@ async def test_load_ldap_config_decrypts_db_values_without_setting_env(monkeypat
 @pytest.mark.asyncio
 async def test_sync_ldap_user_serializes_metadata_for_prisma():
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_usertable.upsert = AsyncMock(
         return_value={
             "user_id": "ldap:alice@example.com",
@@ -68,8 +72,13 @@ async def test_sync_ldap_user_serializes_metadata_for_prisma():
     )
 
     data = mock_prisma.db.litellm_usertable.upsert.call_args.kwargs["data"]
-    assert data["create"]["metadata"] == '{"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com"}'
-    assert data["update"]["metadata"] == '{"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com"}'
+    principal_hash = sha256(b"uid=alice,dc=example,dc=com").hexdigest()
+    expected_metadata = (
+        '{"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com", '
+        f'"ldap_principal_hash": "{principal_hash}"}}'
+    )
+    assert data["create"]["metadata"] == expected_metadata
+    assert data["update"]["metadata"] == expected_metadata
     assert data["create"]["user_role"] == "internal_user"
     assert "user_role" not in data["update"]
 
@@ -77,6 +86,8 @@ async def test_sync_ldap_user_serializes_metadata_for_prisma():
 @pytest.mark.asyncio
 async def test_sync_ldap_user_updates_role_when_admin_group_configured():
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_usertable.upsert = AsyncMock(
         return_value={
             "user_id": "ldap:alice@example.com",
@@ -160,6 +171,8 @@ async def test_authenticate_ldap_user_syncs_role_only_when_admin_group_configure
 @pytest.mark.asyncio
 async def test_sync_ldap_user_parses_prisma_json_string_metadata():
     mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
     mock_prisma.db.litellm_usertable.upsert = AsyncMock(
         return_value={
             "user_id": "ldap:alice@example.com",
@@ -181,6 +194,59 @@ async def test_sync_ldap_user_parses_prisma_json_string_metadata():
     )
 
     assert user.metadata == {"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com"}
+
+
+@pytest.mark.asyncio
+async def test_sync_ldap_user_preserves_legacy_user_id_after_email_change():
+    mock_prisma = MagicMock()
+    legacy_user = {
+        "user_id": "ldap:old@example.com",
+        "user_email": "old@example.com",
+        "user_role": LitellmUserRoles.INTERNAL_USER,
+        "user_alias": "Alice",
+        "metadata": {
+            "auth_provider": "ldap",
+            "ldap_dn": "uid=alice,dc=example,dc=com",
+        },
+    }
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=[None, None])
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=legacy_user)
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock(
+        return_value={
+            **legacy_user,
+            "user_email": "new@example.com",
+        }
+    )
+
+    await _sync_ldap_user(
+        mock_prisma,
+        LDAPDirectoryUser(
+            username="alice",
+            dn="uid=alice,dc=example,dc=com",
+            principal_id="directory-object-123",
+            email="new@example.com",
+            display_name="Alice",
+        ),
+    )
+
+    where = mock_prisma.db.litellm_usertable.upsert.call_args.kwargs["where"]
+    data = mock_prisma.db.litellm_usertable.upsert.call_args.kwargs["data"]
+    assert where == {"user_id": "ldap:old@example.com"}
+    assert data["update"]["user_email"] == "new@example.com"
+    assert sha256(b"directory-object-123").hexdigest() in data["update"]["metadata"]
+
+
+def test_ldap_directory_user_id_is_based_on_stable_principal_not_email():
+    directory_user = LDAPDirectoryUser(
+        username="alice",
+        dn="uid=alice,dc=example,dc=com",
+        principal_id="Directory-Object-123",
+        email="alice@example.com",
+        display_name="Alice",
+    )
+
+    expected = sha256(b"directory-object-123").hexdigest()
+    assert directory_user.user_id == f"ldap:{expected}"
 
 
 def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(monkeypatch):
@@ -259,9 +325,24 @@ def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(mon
     result = _authenticate_ldap_credentials(config, "ali*(ce", "ldap-password")
 
     assert result is not None
-    assert result.user_id == "ldap:alice@example.com"
+    expected_user_id = sha256(b"uid=alice,ou=people,dc=example,dc=com").hexdigest()
+    assert result.user_id == f"ldap:{expected_user_id}"
     assert result.user_role == LitellmUserRoles.PROXY_ADMIN
     assert captured["server"]["url"] == "ldaps://ldap.example.com:636"
     assert captured["search"]["search_base"] == "ou=People,dc=example,dc=com"
     assert captured["search"]["search_filter"] == r"(uid=ali\2a\28ce)"
     assert set(captured["search"]["attributes"]) == {"mail", "displayName", "memberOf"}
+
+
+def test_authenticate_ldap_credentials_rejects_plaintext_bind_by_default():
+    config = LDAPConfig(
+        ldap_enabled=True,
+        ldap_url="ldap://ldap.example.com:389",
+        ldap_base_dn="dc=example,dc=com",
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _authenticate_ldap_credentials(config, "alice", "ldap-password")
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "ldap_allow_insecure"

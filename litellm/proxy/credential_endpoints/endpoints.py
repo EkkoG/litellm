@@ -2,33 +2,43 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-import asyncio
-import time
-import uuid
-from contextlib import asynccontextmanager
-from typing import AsyncIterator, Optional
+import os
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import BaseModel
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.litellm_core_utils.litellm_logging import _get_masked_values
-from litellm.llms.chatgpt.authenticator import DEVICE_CODE_TIMEOUT_SECONDS, Authenticator
-from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL, GetAccessTokenError, GetDeviceCodeError
-from litellm.llms.github_copilot.authenticator import Authenticator as GitHubCopilotAuthenticator
-from litellm.llms.github_copilot.common_utils import GetAccessTokenError as GitHubGetAccessTokenError
-from litellm.llms.github_copilot.common_utils import GetDeviceCodeError as GitHubGetDeviceCodeError
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, hash_token
+from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
+from litellm.llms.chatgpt.device_authorization import ChatGPTDeviceAuthorizationProvider
+from litellm.llms.github_copilot.device_authorization import GitHubCopilotDeviceAuthorizationProvider
+from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
-from litellm.proxy.credential_endpoints.chatgpt_credential_utils import build_chatgpt_credential_values
-from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
+from litellm.proxy.credential_endpoints.credential_writer import (
+    CredentialConflict,
+    CredentialNotFound,
+    CredentialWriter,
+)
+from litellm.proxy.credential_endpoints.device_login_flow import (
+    DeviceLoginFailed,
+    DeviceLoginFlow,
+    DeviceLoginPending,
+    DeviceLoginProvider,
+    InMemoryDeviceLoginStateStore,
+)
+from litellm.proxy.credential_endpoints.device_login_state_store import (
+    _LOCAL_DEVICE_LOGIN_LOCKS,
+    _LOCAL_DEVICE_LOGIN_STATES,
+    RedisDeviceLoginStateStore,
+)
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router = APIRouter()
+_ALLOW_IN_MEMORY_DEVICE_LOGIN_ENV = "LITELLM_ALLOW_IN_MEMORY_DEVICE_LOGIN"
 
 
 class ChatGPTDeviceLoginStartRequest(BaseModel):
@@ -39,53 +49,6 @@ class ChatGPTDeviceLoginStartRequest(BaseModel):
 
 class ChatGPTDeviceLoginPollRequest(BaseModel):
     login_id: str
-
-
-class ChatGPTDeviceLoginState(BaseModel):
-    credential_name: str
-    api_base: Optional[str] = None
-    overwrite_existing: bool = False
-    user_id: Optional[str] = None
-    device_auth_id: str
-    user_code: str
-    interval: int
-    expires_at: float
-
-
-_chatgpt_device_login_flows: dict[str, ChatGPTDeviceLoginState] = {}
-
-
-class GitHubCopilotDeviceLoginState(BaseModel):
-    credential_name: str
-    overwrite_existing: bool = False
-    user_id: Optional[str] = None
-    device_code: str
-    interval: int
-    expires_at: float
-
-
-GITHUB_COPILOT_DEVICE_LOGIN_CACHE_PREFIX = "github_copilot_device_login"
-_github_copilot_device_login_flows: dict[str, GitHubCopilotDeviceLoginState] = {}
-_github_copilot_device_login_locks: dict[str, asyncio.Lock] = {}
-
-
-class CredentialHelperUtils:
-    @staticmethod
-    def encrypt_credential_values(
-        credential: CredentialItem, new_encryption_key: Optional[str] = None
-    ) -> CredentialItem:
-        """Encrypt values in credential.credential_values and add to DB"""
-        encrypted_credential_values = {}
-        for key, value in (credential.credential_values or {}).items():
-            encrypted_credential_values[key] = encrypt_value_helper(value, new_encryption_key)
-
-        # Return a new object to avoid mutating the caller's credential, which
-        # is kept in memory and should remain unencrypted.
-        return CredentialItem(
-            credential_name=credential.credential_name,
-            credential_values=encrypted_credential_values,
-            credential_info=credential.credential_info or {},
-        )
 
 
 @router.post(
@@ -137,19 +100,13 @@ async def create_credential(
             credential_values=credential.credential_values,
             credential_info=credential.credential_info,
         )
-        encrypted_credential = CredentialHelperUtils.encrypt_credential_values(processed_credential)
-        credentials_dict = encrypted_credential.model_dump()
-        credentials_dict_jsonified = jsonify_object(credentials_dict)
-        await CredentialsRepository(prisma_client).create(
-            data={
-                **credentials_dict_jsonified,
-                "created_by": user_api_key_dict.user_id,
-                "updated_by": user_api_key_dict.user_id,
-            }
+        result = await CredentialWriter(CredentialsRepository(prisma_client)).save(
+            credential=processed_credential,
+            actor_id=user_api_key_dict.user_id,
+            overwrite_existing=False,
         )
-
-        ## ADD TO LITELLM ##
-        CredentialAccessor.upsert_credentials([processed_credential])
+        if isinstance(result, CredentialConflict):
+            raise HTTPException(status_code=409, detail="Credential already exists")
 
         return {"success": True, "message": "Credential created successfully"}
     except Exception as e:
@@ -157,194 +114,112 @@ async def create_credential(
         raise handle_exception_on_proxy(e)
 
 
-def _chatgpt_device_login_user_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
-    return user_api_key_dict.user_id or user_api_key_dict.key_alias or user_api_key_dict.token
-
-
-def _github_copilot_device_login_user_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+def _device_login_owner_id(user_api_key_dict: UserAPIKeyAuth) -> str:
     if user_api_key_dict.user_id:
         return user_api_key_dict.user_id
     if user_api_key_dict.key_alias:
         return user_api_key_dict.key_alias
     if user_api_key_dict.token:
         return hash_token(user_api_key_dict.token)
-    return None
+    raise HTTPException(status_code=401, detail="Unable to identify device login owner")
 
 
-def _cleanup_expired_chatgpt_device_login_flows() -> None:
-    now = time.time()
-    expired_login_ids = [login_id for login_id, state in _chatgpt_device_login_flows.items() if state.expires_at <= now]
-    for login_id in expired_login_ids:
-        _chatgpt_device_login_flows.pop(login_id, None)
+def _configured_worker_count() -> int:
+    raw_counts = (os.getenv("NUM_WORKERS", "1"), os.getenv("WEB_CONCURRENCY", "1"))
+    return max(int(value) if value.isdigit() else 1 for value in raw_counts)
 
 
-def _github_copilot_device_login_cache_key(login_id: str) -> str:
-    return f"{GITHUB_COPILOT_DEVICE_LOGIN_CACHE_PREFIX}:{login_id}"
+def _allow_in_memory_device_login() -> bool:
+    return os.getenv(_ALLOW_IN_MEMORY_DEVICE_LOGIN_ENV, "").lower() in {"1", "true", "yes"}
 
 
-async def _store_github_copilot_device_login_state(login_id: str, state: GitHubCopilotDeviceLoginState) -> None:
-    from litellm.proxy.proxy_server import redis_usage_cache
-
-    ttl = max(1, int(state.expires_at - time.time()))
-    if redis_usage_cache is None:
-        _github_copilot_device_login_flows[login_id] = state
-        return
-    encrypted_state = encrypt_value_helper(state.model_dump_json())
-    if not isinstance(encrypted_state, str):
-        raise HTTPException(status_code=500, detail="Unable to secure GitHub Copilot device login state")
-    await redis_usage_cache.async_set_cache(_github_copilot_device_login_cache_key(login_id), encrypted_state, ttl=ttl)
-
-
-async def _get_github_copilot_device_login_state(
-    login_id: str,
-) -> Optional[GitHubCopilotDeviceLoginState]:
-    from litellm.proxy.proxy_server import redis_usage_cache
-
-    if redis_usage_cache is None:
-        value = _github_copilot_device_login_flows.get(login_id)
-        state = value if isinstance(value, GitHubCopilotDeviceLoginState) else None
-    else:
-        encrypted_state = await redis_usage_cache.async_get_cache(_github_copilot_device_login_cache_key(login_id))
-        if not isinstance(encrypted_state, str):
-            return None
-        decrypted_state = decrypt_value_helper(
-            encrypted_state,
-            key="github_copilot_device_login_state",
-            exception_type="debug",
-        )
-        state = GitHubCopilotDeviceLoginState.model_validate_json(decrypted_state) if decrypted_state else None
-    if state is None:
-        return None
-    if state.expires_at <= time.time():
-        await _delete_github_copilot_device_login_state(login_id)
-        return None
-    return state
-
-
-async def _delete_github_copilot_device_login_state(login_id: str) -> None:
-    from litellm.proxy.proxy_server import redis_usage_cache
-
-    _github_copilot_device_login_flows.pop(login_id, None)
-    if redis_usage_cache is not None:
-        await redis_usage_cache.async_delete_cache(_github_copilot_device_login_cache_key(login_id))
-
-
-@asynccontextmanager
-async def _claim_github_copilot_device_login_state(
-    login_id: str,
-) -> AsyncIterator[Optional[GitHubCopilotDeviceLoginState]]:
-    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-    from litellm.proxy.proxy_server import redis_usage_cache
-
-    if redis_usage_cache is not None:
-        lock_manager = PodLockManager(redis_cache=redis_usage_cache)
-        lock_id = f"github_copilot_device_login:{login_id}"
-        acquired = await lock_manager.acquire_lock(lock_id, ttl=30)
-        if not acquired:
-            yield None
-            return
-        try:
-            yield await _get_github_copilot_device_login_state(login_id)
-        finally:
-            await lock_manager.release_lock(lock_id)
-        return
-
-    local_lock = _github_copilot_device_login_locks.setdefault(login_id, asyncio.Lock())
-    if local_lock.locked():
-        yield None
-        return
-    await local_lock.acquire()
-    try:
-        yield await _get_github_copilot_device_login_state(login_id)
-    finally:
-        local_lock.release()
-        if login_id not in _github_copilot_device_login_flows:
-            _github_copilot_device_login_locks.pop(login_id, None)
-
-
-async def _store_chatgpt_credential(
-    credential_name: str,
-    credential_values: dict,
-    user_id: Optional[str],
-    overwrite_existing: bool,
-) -> None:
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
-    credentials_repository = CredentialsRepository(prisma_client)
-    existing_credential = await credentials_repository.find_by_name(credential_name)
-    if existing_credential is not None and not overwrite_existing:
-        raise HTTPException(status_code=409, detail="Credential already exists")
-
-    processed_credential = CredentialItem(
-        credential_name=credential_name,
-        credential_values=credential_values,
-        credential_info={
-            "custom_llm_provider": "chatgpt",
-            "auth_type": "device_code",
-            "chatgpt_account_id": credential_values.get("chatgpt_account_id"),
-        },
-    )
-    encrypted_credential = CredentialHelperUtils.encrypt_credential_values(processed_credential)
-    credentials_dict_jsonified = jsonify_object(encrypted_credential.model_dump())
-    if existing_credential is None:
-        await credentials_repository.create(
-            data={
-                **credentials_dict_jsonified,
-                "created_by": user_id,
-                "updated_by": user_id,
-            }
-        )
-    else:
-        await credentials_repository.update_by_name(
-            credential_name,
-            data={
-                **credentials_dict_jsonified,
-                "updated_by": user_id,
-            },
-        )
-
-    CredentialAccessor.upsert_credentials([processed_credential])
-
-
-async def _store_github_copilot_credential(
-    credential_name: str,
-    access_token: str,
-    user_id: Optional[str],
-    overwrite_existing: bool,
-) -> None:
-    from litellm.proxy.proxy_server import prisma_client
+def _build_device_login_flow() -> DeviceLoginFlow:
+    from litellm.proxy.proxy_server import prisma_client, redis_usage_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
-
-    credentials_repository = CredentialsRepository(prisma_client)
-    existing_credential = await credentials_repository.find_by_name(credential_name)
-    if existing_credential is not None and not overwrite_existing:
-        raise HTTPException(status_code=409, detail="Credential already exists")
-
-    processed_credential = CredentialItem(
-        credential_name=credential_name,
-        credential_values={"github_copilot_access_token": access_token},
-        credential_info={"custom_llm_provider": "github_copilot", "auth_type": "device_code"},
+    if redis_usage_cache is None and (_configured_worker_count() > 1 or not _allow_in_memory_device_login()):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Device login requires Redis. Single-process development can explicitly set "
+                f"{_ALLOW_IN_MEMORY_DEVICE_LOGIN_ENV}=true"
+            ),
+        )
+    state_store = (
+        RedisDeviceLoginStateStore(redis_usage_cache)
+        if redis_usage_cache is not None
+        else InMemoryDeviceLoginStateStore(_LOCAL_DEVICE_LOGIN_STATES, _LOCAL_DEVICE_LOGIN_LOCKS)
     )
-    encrypted_credential = CredentialHelperUtils.encrypt_credential_values(processed_credential)
-    credentials_dict_jsonified = jsonify_object(encrypted_credential.model_dump())
-    if existing_credential is None:
-        await credentials_repository.create(
-            data={**credentials_dict_jsonified, "created_by": user_id, "updated_by": user_id}
-        )
-    else:
-        await credentials_repository.update_by_name(
-            credential_name,
-            data={**credentials_dict_jsonified, "updated_by": user_id},
-        )
-    CredentialAccessor.upsert_credentials([processed_credential])
+    return DeviceLoginFlow(
+        providers={
+            "chatgpt": ChatGPTDeviceAuthorizationProvider(),
+            "github_copilot": GitHubCopilotDeviceAuthorizationProvider(),
+        },
+        state_store=state_store,
+        credential_writer=CredentialWriter(CredentialsRepository(prisma_client)),
+    )
+
+
+def _validate_device_login_request(body: ChatGPTDeviceLoginStartRequest, user_api_key_dict: UserAPIKeyAuth) -> None:
+    if body.overwrite_existing and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(status_code=403, detail="Admin role is required to overwrite a credential")
+    if body.api_base is None:
+        return
+    try:
+        validate_url(body.api_base)
+    except SSRFError as exc:
+        raise HTTPException(status_code=400, detail="Invalid or unsafe API base URL") from exc
+
+
+async def _start_device_login(
+    provider: DeviceLoginProvider,
+    body: ChatGPTDeviceLoginStartRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    _validate_device_login_request(body, user_api_key_dict)
+    result = await _build_device_login_flow().start(
+        provider=provider,
+        credential_name=body.credential_name,
+        owner_id=_device_login_owner_id(user_api_key_dict),
+        overwrite_existing=body.overwrite_existing,
+        api_base=body.api_base,
+    )
+    if isinstance(result, DeviceLoginFailed):
+        raise HTTPException(status_code=result.status_code, detail=result.detail)
+    return {
+        "success": True,
+        "login_id": result.login_id,
+        "verification_url": result.verification_url,
+        "user_code": result.user_code,
+        "interval": result.interval_seconds,
+        "expires_at": result.expires_at,
+    }
+
+
+async def _poll_device_login(
+    body: ChatGPTDeviceLoginPollRequest,
+    user_api_key_dict: UserAPIKeyAuth,
+):
+    result = await _build_device_login_flow().poll(
+        login_id=body.login_id,
+        owner_id=_device_login_owner_id(user_api_key_dict),
+    )
+    if isinstance(result, DeviceLoginFailed):
+        raise HTTPException(status_code=result.status_code, detail=result.detail)
+    if isinstance(result, DeviceLoginPending):
+        return {
+            "success": True,
+            "status": "pending",
+            "interval": result.retry_after_seconds,
+            "retry_after_seconds": result.retry_after_seconds,
+            "expires_at": result.expires_at,
+        }
+    return {
+        "success": True,
+        "status": "complete",
+        "credential_name": result.credential_name,
+    }
 
 
 @router.post(
@@ -358,46 +233,7 @@ async def start_chatgpt_device_login(
     body: ChatGPTDeviceLoginStartRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(
-            status_code=500,
-            detail={"error": CommonProxyErrors.db_not_connected_error.value},
-        )
-
-    _cleanup_expired_chatgpt_device_login_flows()
-    if not body.overwrite_existing:
-        existing_credential = await CredentialsRepository(prisma_client).find_by_name(body.credential_name)
-        if existing_credential is not None:
-            raise HTTPException(status_code=409, detail="Credential already exists")
-
-    try:
-        device_code = Authenticator()._request_device_code()
-    except GetDeviceCodeError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-
-    login_id = str(uuid.uuid4())
-    interval = int(device_code.get("interval", "5"))
-    expires_at = time.time() + DEVICE_CODE_TIMEOUT_SECONDS
-    _chatgpt_device_login_flows[login_id] = ChatGPTDeviceLoginState(
-        credential_name=body.credential_name,
-        api_base=body.api_base,
-        overwrite_existing=body.overwrite_existing,
-        user_id=_chatgpt_device_login_user_id(user_api_key_dict),
-        device_auth_id=device_code["device_auth_id"],
-        user_code=device_code["user_code"],
-        interval=interval,
-        expires_at=expires_at,
-    )
-    return {
-        "success": True,
-        "login_id": login_id,
-        "verification_url": CHATGPT_DEVICE_VERIFY_URL,
-        "user_code": device_code["user_code"],
-        "interval": interval,
-        "expires_at": expires_at,
-    }
+    return await _start_device_login("chatgpt", body, user_api_key_dict)
 
 
 @router.post(
@@ -411,53 +247,7 @@ async def poll_chatgpt_device_login(
     body: ChatGPTDeviceLoginPollRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    _cleanup_expired_chatgpt_device_login_flows()
-    login_state = _chatgpt_device_login_flows.get(body.login_id)
-    if login_state is None:
-        raise HTTPException(status_code=404, detail="ChatGPT device login not found or expired")
-
-    if login_state.user_id != _chatgpt_device_login_user_id(user_api_key_dict):
-        raise HTTPException(status_code=403, detail="ChatGPT device login belongs to another user")
-
-    authenticator = Authenticator()
-    try:
-        authorization_code = authenticator._poll_for_authorization_code_once(
-            {
-                "device_auth_id": login_state.device_auth_id,
-                "user_code": login_state.user_code,
-                "interval": str(login_state.interval),
-            }
-        )
-    except GetAccessTokenError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-
-    if authorization_code is None:
-        return {
-            "success": True,
-            "status": "pending",
-            "interval": login_state.interval,
-            "expires_at": login_state.expires_at,
-        }
-
-    try:
-        tokens = authenticator._exchange_code_for_tokens(authorization_code)
-    except GetAccessTokenError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-
-    credential_values = build_chatgpt_credential_values(tokens=tokens, api_base=login_state.api_base)
-    await _store_chatgpt_credential(
-        credential_name=login_state.credential_name,
-        credential_values=credential_values,
-        user_id=login_state.user_id,
-        overwrite_existing=login_state.overwrite_existing,
-    )
-    _chatgpt_device_login_flows.pop(body.login_id, None)
-    return {
-        "success": True,
-        "status": "complete",
-        "credential_name": login_state.credential_name,
-        "chatgpt_account_id": credential_values.get("chatgpt_account_id"),
-    }
+    return await _poll_device_login(body, user_api_key_dict)
 
 
 @router.post(
@@ -471,40 +261,7 @@ async def start_github_copilot_device_login(
     body: ChatGPTDeviceLoginStartRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    from litellm.proxy.proxy_server import prisma_client
-
-    if prisma_client is None:
-        raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
-    if not body.overwrite_existing:
-        existing_credential = await CredentialsRepository(prisma_client).find_by_name(body.credential_name)
-        if existing_credential is not None:
-            raise HTTPException(status_code=409, detail="Credential already exists")
-
-    try:
-        device_code = GitHubCopilotAuthenticator()._get_device_code()
-    except GitHubGetDeviceCodeError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-
-    login_id = str(uuid.uuid4())
-    interval = int(device_code.get("interval", "5"))
-    expires_at = time.time() + int(device_code.get("expires_in", "900"))
-    login_state = GitHubCopilotDeviceLoginState(
-        credential_name=body.credential_name,
-        overwrite_existing=body.overwrite_existing,
-        user_id=_github_copilot_device_login_user_id(user_api_key_dict),
-        device_code=device_code["device_code"],
-        interval=interval,
-        expires_at=expires_at,
-    )
-    await _store_github_copilot_device_login_state(login_id, login_state)
-    return {
-        "success": True,
-        "login_id": login_id,
-        "verification_url": device_code["verification_uri"],
-        "user_code": device_code["user_code"],
-        "interval": interval,
-        "expires_at": expires_at,
-    }
+    return await _start_device_login("github_copilot", body, user_api_key_dict)
 
 
 @router.post(
@@ -518,33 +275,7 @@ async def poll_github_copilot_device_login(
     body: ChatGPTDeviceLoginPollRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    async with _claim_github_copilot_device_login_state(body.login_id) as login_state:
-        if login_state is None:
-            raise HTTPException(status_code=409, detail="GitHub Copilot device login is busy, missing, or expired")
-        if login_state.user_id != _github_copilot_device_login_user_id(user_api_key_dict):
-            raise HTTPException(status_code=403, detail="GitHub Copilot device login belongs to another user")
-
-        try:
-            access_token = GitHubCopilotAuthenticator()._poll_for_access_token_once(login_state.device_code)
-        except GitHubGetAccessTokenError as e:
-            await _delete_github_copilot_device_login_state(body.login_id)
-            raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-        if access_token is None:
-            return {
-                "success": True,
-                "status": "pending",
-                "interval": login_state.interval,
-                "expires_at": login_state.expires_at,
-            }
-
-        await _store_github_copilot_credential(
-            credential_name=login_state.credential_name,
-            access_token=access_token,
-            user_id=login_state.user_id,
-            overwrite_existing=login_state.overwrite_existing,
-        )
-        await _delete_github_copilot_device_login_state(body.login_id)
-        return {"success": True, "status": "complete", "credential_name": login_state.credential_name}
+    return await _poll_device_login(body, user_api_key_dict)
 
 
 @router.get(
@@ -675,52 +406,10 @@ async def delete_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        await CredentialsRepository(prisma_client).delete_by_name(credential_name)
-
-        ## DELETE FROM LITELLM ##
-        litellm.credential_list = [cred for cred in litellm.credential_list if cred.credential_name != credential_name]
+        await CredentialWriter(CredentialsRepository(prisma_client)).delete(credential_name)
         return {"success": True, "message": "Credential deleted successfully"}
     except Exception as e:
         return handle_exception_on_proxy(e)
-
-
-def update_db_credential(
-    db_credential: CredentialItem,
-    updated_patch: CredentialItem,
-    new_encryption_key: Optional[str] = None,
-) -> CredentialItem:
-    """
-    Update a credential in the DB.
-    """
-    merged_credential = CredentialItem(
-        credential_name=db_credential.credential_name,
-        credential_info=db_credential.credential_info,
-        credential_values=db_credential.credential_values,
-    )
-
-    encrypted_credential = CredentialHelperUtils.encrypt_credential_values(
-        updated_patch,
-        new_encryption_key,
-    )
-    # update model name
-    if encrypted_credential.credential_name:
-        merged_credential.credential_name = encrypted_credential.credential_name
-
-    # update litellm params
-    if encrypted_credential.credential_values:
-        # Encrypt any sensitive values
-        encrypted_params = {k: v for k, v in encrypted_credential.credential_values.items()}
-
-        merged_credential.credential_values.update(encrypted_params)
-
-    # update model info
-    if encrypted_credential.credential_info:
-        """Update credential info"""
-        if "credential_info" not in merged_credential.credential_info:
-            merged_credential.credential_info = {}
-        merged_credential.credential_info.update(encrypted_credential.credential_info)
-
-    return merged_credential
 
 
 @router.patch(
@@ -746,44 +435,15 @@ async def update_credential(
                 status_code=500,
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
-        credentials_repository = CredentialsRepository(prisma_client)
-        db_credential = await credentials_repository.find_by_name(credential_name)
-        if db_credential is None:
-            raise HTTPException(status_code=404, detail="Credential not found in DB.")
-        merged_credential = update_db_credential(db_credential, credential)
-        credential_object_jsonified = jsonify_object(merged_credential.model_dump())
-        await credentials_repository.update_by_name(
-            credential_name,
-            data={
-                **credential_object_jsonified,
-                "updated_by": user_api_key_dict.user_id,
-            },
+        result = await CredentialWriter(CredentialsRepository(prisma_client)).patch(
+            credential_name=credential_name,
+            patch=credential,
+            actor_id=user_api_key_dict.user_id,
         )
-
-        # Sync in-memory credential_list (skip if not in memory - e.g., proxy restarted)
-        new_name = merged_credential.credential_name
-        existing_in_memory: Optional[CredentialItem] = None
-        for cred in litellm.credential_list:
-            if cred.credential_name == credential_name:
-                existing_in_memory = cred
-                break
-
-        if existing_in_memory is not None:
-            in_memory_values = dict(existing_in_memory.credential_values or {})
-            if credential.credential_values:
-                in_memory_values.update(credential.credential_values)
-            in_memory_info = dict(existing_in_memory.credential_info or {})
-            if credential.credential_info:
-                in_memory_info.update(credential.credential_info)
-            updated_in_memory = CredentialItem(
-                credential_name=new_name,
-                credential_values=in_memory_values,
-                credential_info=in_memory_info,
-            )
-            # Remove old entry if renamed, then use upsert_credentials to handle duplicates
-            if new_name != credential_name:
-                litellm.credential_list = [c for c in litellm.credential_list if c.credential_name != credential_name]
-            CredentialAccessor.upsert_credentials([updated_in_memory])
+        if isinstance(result, CredentialNotFound):
+            raise HTTPException(status_code=404, detail="Credential not found in DB.")
+        if isinstance(result, CredentialConflict):
+            raise HTTPException(status_code=409, detail="Credential already exists")
 
         return {"success": True, "message": "Credential updated successfully"}
     except Exception as e:

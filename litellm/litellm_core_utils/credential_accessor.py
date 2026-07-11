@@ -1,12 +1,19 @@
 """Utils for accessing credentials."""
 
-from typing import List
+from typing import List, Optional
 
 import litellm
 from litellm.types.utils import CredentialItem
 
 
 class CredentialAccessor:
+    @staticmethod
+    def get_credential(credential_name: str) -> Optional[CredentialItem]:
+        return next(
+            (credential for credential in litellm.credential_list if credential.credential_name == credential_name),
+            None,
+        )
+
     @staticmethod
     def get_credential_values(credential_name: str) -> dict:
         """Safe accessor for credentials."""
@@ -39,3 +46,9 @@ class CredentialAccessor:
                         break
             else:
                 litellm.credential_list.append(credential)
+
+    @staticmethod
+    def delete_credential(credential_name: str) -> None:
+        litellm.credential_list = [
+            credential for credential in litellm.credential_list if credential.credential_name != credential_name
+        ]

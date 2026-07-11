@@ -4,16 +4,14 @@ import sys
 import pytest
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
 
 
 import responses
 
 from litellm.proxy.client.credentials import CredentialsManagementClient
 from litellm.proxy.client.exceptions import UnauthorizedError
-from litellm.proxy.credential_endpoints.endpoints import CredentialHelperUtils
+from litellm.proxy.credential_endpoints.credential_writer import encrypt_credential_values
 from litellm.types.utils import CredentialItem
 
 
@@ -276,7 +274,7 @@ def test_encrypt_credential_values_does_not_mutate_original(monkeypatch):
         credential_info={"api_type": "azure"},
     )
 
-    encrypted = CredentialHelperUtils.encrypt_credential_values(credential)
+    encrypted = encrypt_credential_values(credential)
 
     assert encrypted.credential_values["api_key"] != "sk-123"
     assert credential.credential_values["api_key"] == "sk-123"
