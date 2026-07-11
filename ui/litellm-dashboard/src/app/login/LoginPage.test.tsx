@@ -357,6 +357,10 @@ describe("LoginPage", () => {
 
     const ldapAuthOption = await screen.findByRole("radio", { name: "LDAP" });
     expect(ldapAuthOption).toBeChecked();
+    expect(screen.getAllByRole("radio").map((option) => option.closest("label")?.textContent)).toEqual([
+      "LDAP",
+      "LiteLLM account",
+    ]);
 
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "local-password" } });
