@@ -82,3 +82,5 @@ jobs:
           platforms: ${{ env.IMAGE_PLATFORMS }}
           tags: ${{ env.TAGS }}
           push: true
+          cache-from: type=gha,scope=litellm-ghcr-${{ env.IMAGE_PLATFORMS }}
+          cache-to: type=gha,mode=max,scope=litellm-ghcr-${{ env.IMAGE_PLATFORMS }}
