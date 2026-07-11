@@ -76,7 +76,7 @@ class Authenticator:
             status_code=401,
         )
 
-    def get_api_key(self) -> str:
+    def get_api_key(self, access_token: Optional[str] = None) -> str:
         """
         Get the API key, refreshing if necessary.
 
@@ -105,7 +105,7 @@ class Authenticator:
             pass  # Already logged in the try block
 
         try:
-            api_key_info = self._refresh_api_key()
+            api_key_info = self._refresh_api_key(access_token)
             with open(self.api_key_file, "w") as f:
                 json.dump(api_key_info, f)
             token = api_key_info.get("token")
@@ -145,7 +145,7 @@ class Authenticator:
             verbose_logger.warning(f"Error reading API endpoint from file: {str(e)}")
             return None
 
-    def _refresh_api_key(self) -> Dict[str, Any]:
+    def _refresh_api_key(self, access_token: Optional[str] = None) -> Dict[str, Any]:
         """
         Refresh the API key using the access token.
 
@@ -155,8 +155,8 @@ class Authenticator:
         Raises:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
-        access_token = self.get_access_token()
-        headers = self._get_github_headers(access_token)
+        resolved_access_token = access_token or self.get_access_token()
+        headers = self._get_github_headers(resolved_access_token)
         api_key_url = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
 
         max_retries = 3
@@ -328,6 +328,35 @@ class Authenticator:
             message="Timed out waiting for user to authorize the device",
             status_code=400,
         )
+
+    def _poll_for_access_token_once(self, device_code: str) -> Optional[str]:
+        sync_client = _get_httpx_client()
+        access_token_url = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
+        client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
+        try:
+            resp = sync_client.post(
+                access_token_url,
+                headers=self._get_github_headers(),
+                json={
+                    "client_id": client_id,
+                    "device_code": device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+                },
+            )
+            resp.raise_for_status()
+            resp_json = resp.json()
+        except httpx.HTTPStatusError as e:
+            raise GetAccessTokenError(message=f"Failed to get access token: {str(e)}", status_code=400) from e
+        except (json.JSONDecodeError, TypeError) as e:
+            raise GetAccessTokenError(message=f"Failed to decode access token response: {str(e)}", status_code=400) from e
+
+        access_token = resp_json.get("access_token")
+        if isinstance(access_token, str) and access_token:
+            return access_token
+        if resp_json.get("error") in {"authorization_pending", "slow_down"}:
+            return None
+        error = resp_json.get("error_description") or resp_json.get("error") or "Unexpected GitHub OAuth response"
+        raise GetAccessTokenError(message=str(error), status_code=400)
 
     def _login(self) -> str:
         """

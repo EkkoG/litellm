@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
 import EditCredentialModal from "./EditCredentialModal";
@@ -52,6 +52,8 @@ vi.mock("../networking", async () => {
   };
 });
 
+afterEach(cleanup);
+
 const createQueryClient = () =>
   new QueryClient({
     defaultOptions: {
@@ -87,6 +89,12 @@ const mockChatGPTCredential: CredentialItem = {
   credential_info: {
     custom_llm_provider: Providers.ChatGPT,
   },
+};
+
+const mockGitHubCopilotCredential: CredentialItem = {
+  credential_name: "copilot-admin",
+  credential_values: { api_key: "****abcd" },
+  credential_info: { custom_llm_provider: "github_copilot" },
 };
 
 describe("EditCredentialModal", () => {
@@ -154,6 +162,25 @@ describe("EditCredentialModal", () => {
     );
 
     expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument();
+    expect(screen.queryByDisplayValue("****abcd")).not.toBeInTheDocument();
+  });
+
+  it("should render GitHub Copilot reconnect instead of masked token fields", async () => {
+    const queryClient = createQueryClient();
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EditCredentialModal
+          open={true}
+          onCancel={vi.fn()}
+          onUpdateCredential={vi.fn()}
+          uploadProps={mockUploadProps}
+          existingCredential={mockGitHubCopilotCredential}
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
     expect(screen.queryByDisplayValue("****abcd")).not.toBeInTheDocument();
   });
 });
