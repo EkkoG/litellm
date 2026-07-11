@@ -24,6 +24,7 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     GetAPIKeyError,
     DEFAULT_GITHUB_COPILOT_API_BASE,
+    get_github_copilot_access_token,
     get_copilot_default_headers,
 )
 
@@ -61,7 +62,8 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key(api_key)
+            github_access_token = get_github_copilot_access_token(litellm_params)
+            api_key = self.authenticator.get_api_key(github_access_token)
 
             if not api_key:
                 raise AuthenticationError(
@@ -99,10 +101,8 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        # Use provided api_base or fall back to authenticator's base or default
         effective_api_base = (
-            api_base
-            or self.authenticator.get_api_base()
+            self.authenticator.get_api_base(get_github_copilot_access_token(litellm_params))
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )

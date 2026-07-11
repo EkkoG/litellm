@@ -9,6 +9,7 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    get_github_copilot_access_token,
     get_copilot_default_headers,
 )
 
@@ -68,9 +69,12 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         # session, never the caller-supplied api_base. rstrip so a
         # tenant-specific base with a trailing slash does not yield a
         # double-slash URL once "/v1/messages" is appended downstream.
-        dynamic_api_base = (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        github_access_token = get_github_copilot_access_token(litellm_params)
+        dynamic_api_base = (
+            self.authenticator.get_api_base(github_access_token) or DEFAULT_GITHUB_COPILOT_API_BASE
+        ).rstrip("/")
         try:
-            dynamic_api_key = self.authenticator.get_api_key(api_key)
+            dynamic_api_key = self.authenticator.get_api_key(github_access_token)
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,
@@ -116,7 +120,7 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         reuse it to avoid a second authenticator read, falling back to a fresh
         resolution only if it was not provided.
         """
-        resolved = (api_base or self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        resolved = (api_base or self.authenticator.get_api_base(api_key) or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
         if not resolved.endswith("/v1/messages"):
             resolved = f"{resolved}/v1/messages"
         return resolved

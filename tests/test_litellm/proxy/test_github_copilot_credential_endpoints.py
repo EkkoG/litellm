@@ -85,6 +85,6 @@ async def test_poll_github_copilot_device_login_creates_credential(monkeypatch):
 
     assert response["status"] == "complete"
     stored_values = json.loads(fake_prisma_client.table.created_data["credential_values"])
-    assert stored_values == {"api_key": "github-access-token"}
+    assert stored_values == {"github_copilot_access_token": "github-access-token"}
     assert litellm.credential_list[0].credential_info["custom_llm_provider"] == "github_copilot"
     assert login_id not in endpoints._github_copilot_device_login_flows

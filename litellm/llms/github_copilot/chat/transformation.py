@@ -5,7 +5,6 @@ import os
 
 import httpx
 
-from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
@@ -15,6 +14,7 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    get_github_copilot_access_token,
     get_copilot_default_headers,
 )
 
@@ -35,21 +35,15 @@ class GithubCopilotConfig(OpenAIConfig):
         api_base: str | None,
         api_key: str | None,
         custom_llm_provider: str,
+        litellm_params: object = None,
     ) -> Tuple[str | None, str | None, str]:
+        github_access_token = get_github_copilot_access_token(litellm_params)
         dynamic_api_base = (
-            api_base
-            or self.authenticator.get_api_base()
+            self.authenticator.get_api_base(github_access_token)
             or os.getenv("GITHUB_COPILOT_API_BASE")
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )
-        try:
-            dynamic_api_key = self.authenticator.get_api_key(api_key)
-        except GetAPIKeyError as e:
-            raise AuthenticationError(
-                model=model,
-                llm_provider=custom_llm_provider,
-                message=str(e),
-            )
+        dynamic_api_key = self.authenticator.get_api_key(github_access_token)
         return dynamic_api_base, dynamic_api_key, custom_llm_provider
 
     def _transform_messages(
@@ -95,7 +89,8 @@ class GithubCopilotConfig(OpenAIConfig):
 
         # Add Copilot-specific headers (editor-version, user-agent, etc.)
         try:
-            copilot_api_key = self.authenticator.get_api_key(api_key)
+            github_access_token = get_github_copilot_access_token(litellm_params)
+            copilot_api_key = self.authenticator.get_api_key(github_access_token)
             copilot_headers = get_copilot_default_headers(copilot_api_key)
             validated_headers = {**copilot_headers, **validated_headers}
         except GetAPIKeyError:
