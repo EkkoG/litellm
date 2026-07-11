@@ -56,6 +56,12 @@ class Authenticator:
     def get_api_base(self, github_access_token: Optional[str]) -> Optional[str]:
         return self._get_copilot_credential(github_access_token).api_base
 
+    def request_device_code(self) -> Dict[str, str]:
+        return self._get_device_code()
+
+    def poll_for_access_token_once(self, device_code: str) -> Optional[str]:
+        return self._poll_for_access_token_once(device_code)
+
     def _get_copilot_credential(self, github_access_token: Optional[str]) -> CopilotCredential:
         if not github_access_token:
             raise GetAPIKeyError(

@@ -63,6 +63,15 @@ class Authenticator:
         id_token = auth_data.get("id_token")
         return self._extract_account_id(id_token or auth_data.get("access_token"))
 
+    def request_device_code(self) -> dict[str, str]:
+        return self._request_device_code()
+
+    def poll_for_authorization_code_once(self, device_code: dict[str, str]) -> Optional[dict[str, str]]:
+        return self._poll_for_authorization_code_once(device_code)
+
+    def exchange_code_for_tokens(self, code_data: dict[str, str]) -> dict[str, str]:
+        return self._exchange_code_for_tokens(code_data)
+
     def _build_auth_data_from_params(self, api_key: Optional[str], litellm_params: Optional[Any]) -> dict[str, Any]:
         params = self._coerce_params(litellm_params)
         return {
