@@ -241,7 +241,7 @@ async def _store_github_copilot_credential(
 
     processed_credential = CredentialItem(
         credential_name=credential_name,
-        credential_values={"api_key": access_token},
+        credential_values={"github_copilot_access_token": access_token},
         credential_info={"custom_llm_provider": "github_copilot", "auth_type": "device_code"},
     )
     encrypted_credential = CredentialHelperUtils.encrypt_credential_values(processed_credential)

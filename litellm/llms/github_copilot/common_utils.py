@@ -2,7 +2,7 @@
 Constants for Copilot integration
 """
 
-from typing import Optional, Union
+from typing import Mapping, Optional, Union
 from uuid import uuid4
 
 import httpx
@@ -15,6 +15,14 @@ EDITOR_PLUGIN_VERSION = f"copilot-chat/{COPILOT_VERSION}"
 USER_AGENT = f"GitHubCopilotChat/{COPILOT_VERSION}"
 API_VERSION = "2025-04-01"
 DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
+
+
+def get_github_copilot_access_token(litellm_params: object) -> Optional[str]:
+    if isinstance(litellm_params, Mapping):
+        value = litellm_params.get("github_copilot_access_token")
+    else:
+        value = getattr(litellm_params, "github_copilot_access_token", None)
+    return value if isinstance(value, str) and value else None
 
 
 class GithubCopilotError(BaseLLMException):

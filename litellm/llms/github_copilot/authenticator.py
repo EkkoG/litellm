@@ -1,6 +1,8 @@
 import json
 import os
-import time
+import hashlib
+import threading
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -10,7 +12,6 @@ from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import _get_httpx_client
 
 from .common_utils import (
-    APIKeyExpiredError,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
@@ -24,128 +25,64 @@ DEFAULT_GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
 
 
+@dataclass(frozen=True, slots=True)
+class CopilotCredential:
+    token: str
+    expires_at: float
+    api_base: Optional[str]
+
+
 class Authenticator:
-    def __init__(self) -> None:
-        """Initialize the GitHub Copilot authenticator with configurable token paths."""
-        # Token storage paths
-        self.token_dir = os.getenv(
-            "GITHUB_COPILOT_TOKEN_DIR",
-            os.path.expanduser("~/.config/litellm/github_copilot"),
-        )
-        self.access_token_file = os.path.join(
-            self.token_dir,
-            os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_FILE", "access-token"),
-        )
-        self.api_key_file = os.path.join(self.token_dir, os.getenv("GITHUB_COPILOT_API_KEY_FILE", "api-key.json"))
-        self._ensure_token_dir()
+    _cache: dict[str, CopilotCredential] = {}
+    _refresh_locks: dict[str, threading.Lock] = {}
+    _cache_lock = threading.Lock()
 
-    def get_access_token(self) -> str:
-        """
-        Login to Copilot with retry 3 times.
+    def get_api_key(self, github_access_token: Optional[str]) -> str:
+        return self._get_copilot_credential(github_access_token).token
 
-        Returns:
-            str: The GitHub access token.
+    def get_api_base(self, github_access_token: Optional[str]) -> Optional[str]:
+        return self._get_copilot_credential(github_access_token).api_base
 
-        Raises:
-            GetAccessTokenError: If unable to obtain an access token after retries.
-        """
-        try:
-            with open(self.access_token_file, "r") as f:
-                access_token = f.read().strip()
-                if access_token:
-                    return access_token
-        except IOError:
-            verbose_logger.warning("No existing access token found or error reading file")
-
-        for attempt in range(3):
-            verbose_logger.debug(f"Access token acquisition attempt {attempt + 1}/3")
-            try:
-                access_token = self._login()
-                try:
-                    with open(self.access_token_file, "w") as f:
-                        f.write(access_token)
-                except IOError:
-                    verbose_logger.error("Error saving access token to file")
-                return access_token
-            except (GetDeviceCodeError, GetAccessTokenError, RefreshAPIKeyError) as e:
-                verbose_logger.warning(f"Failed attempt {attempt + 1}: {str(e)}")
-                continue
-
-        raise GetAccessTokenError(
-            message="Failed to get access token after 3 attempts",
-            status_code=401,
-        )
-
-    def get_api_key(self, access_token: Optional[str] = None) -> str:
-        """
-        Get the API key, refreshing if necessary.
-
-        Returns:
-            str: The GitHub Copilot API key.
-
-        Raises:
-            GetAPIKeyError: If unable to obtain an API key.
-        """
-        try:
-            with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
-                if api_key_info.get("expires_at", 0) > datetime.now().timestamp():
-                    return api_key_info.get("token")
-                else:
-                    verbose_logger.warning("API key expired, refreshing")
-                    raise APIKeyExpiredError(
-                        message="API key expired",
-                        status_code=401,
-                    )
-        except IOError:
-            verbose_logger.warning("No API key file found or error opening file")
-        except (json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning(f"Error reading API key from file: {str(e)}")
-        except APIKeyExpiredError:
-            pass  # Already logged in the try block
-
-        try:
-            api_key_info = self._refresh_api_key(access_token)
-            with open(self.api_key_file, "w") as f:
-                json.dump(api_key_info, f)
-            token = api_key_info.get("token")
-            if token:
-                return token
-            else:
-                raise GetAPIKeyError(
-                    message="API key response missing token",
-                    status_code=401,
-                )
-        except IOError as e:
-            verbose_logger.error(f"Error saving API key to file: {str(e)}")
+    def _get_copilot_credential(self, github_access_token: Optional[str]) -> CopilotCredential:
+        if not github_access_token:
             raise GetAPIKeyError(
-                message=f"Failed to save API key: {str(e)}",
-                status_code=500,
-            )
-        except RefreshAPIKeyError as e:
-            raise GetAPIKeyError(
-                message=f"Failed to refresh API key: {str(e)}",
+                message=(
+                    "GitHub Copilot credential is required. Create one from "
+                    "Models & Endpoints > LLM Credentials > Github Copilot."
+                ),
                 status_code=401,
             )
+        cache_key = hashlib.sha256(github_access_token.encode()).hexdigest()
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+            refresh_lock = self._refresh_locks.setdefault(cache_key, threading.Lock())
+        if cached is not None and cached.expires_at > datetime.now().timestamp() + 60:
+            return cached
+        with refresh_lock:
+            with self._cache_lock:
+                cached = self._cache.get(cache_key)
+            if cached is not None and cached.expires_at > datetime.now().timestamp() + 60:
+                return cached
+            try:
+                response = self._refresh_api_key(github_access_token)
+            except RefreshAPIKeyError as e:
+                raise GetAPIKeyError(message=f"Failed to refresh API key: {str(e)}", status_code=401) from e
+            token = response.get("token")
+            if not isinstance(token, str) or not token:
+                raise GetAPIKeyError(message="API key response missing token", status_code=401)
+            expires_at = response.get("expires_at")
+            try:
+                resolved_expires_at = float(expires_at)
+            except (TypeError, ValueError):
+                resolved_expires_at = 0.0
+            endpoints = response.get("endpoints")
+            api_base = endpoints.get("api") if isinstance(endpoints, dict) else None
+            credential = CopilotCredential(token=token, expires_at=resolved_expires_at, api_base=api_base)
+            with self._cache_lock:
+                self._cache[cache_key] = credential
+        return credential
 
-    def get_api_base(self) -> Optional[str]:
-        """
-        Get the API endpoint from the api-key.json file.
-
-        Returns:
-            Optional[str]: The GitHub Copilot API endpoint, or None if not found.
-        """
-        try:
-            with open(self.api_key_file, "r") as f:
-                api_key_info = json.load(f)
-                endpoints = api_key_info.get("endpoints", {})
-                api_endpoint = endpoints.get("api")
-                return api_endpoint
-        except (IOError, json.JSONDecodeError, KeyError) as e:
-            verbose_logger.warning(f"Error reading API endpoint from file: {str(e)}")
-            return None
-
-    def _refresh_api_key(self, access_token: Optional[str] = None) -> Dict[str, Any]:
+    def _refresh_api_key(self, github_access_token: str) -> Dict[str, Any]:
         """
         Refresh the API key using the access token.
 
@@ -155,8 +92,7 @@ class Authenticator:
         Raises:
             RefreshAPIKeyError: If unable to refresh the API key.
         """
-        resolved_access_token = access_token or self.get_access_token()
-        headers = self._get_github_headers(resolved_access_token)
+        headers = self._get_github_headers(github_access_token)
         api_key_url = os.getenv("GITHUB_COPILOT_API_KEY_URL", DEFAULT_GITHUB_API_KEY_URL)
 
         max_retries = 3
@@ -181,11 +117,6 @@ class Authenticator:
             message="Failed to refresh API key after maximum retries",
             status_code=401,
         )
-
-    def _ensure_token_dir(self) -> None:
-        """Ensure the token directory exists."""
-        if not os.path.exists(self.token_dir):
-            os.makedirs(self.token_dir, exist_ok=True)
 
     def _get_github_headers(self, access_token: Optional[str] = None) -> Dict[str, str]:
         """
@@ -263,72 +194,6 @@ class Authenticator:
                 status_code=400,
             )
 
-    def _poll_for_access_token(self, device_code: str) -> str:
-        """
-        Poll for an access token after user authentication.
-
-        Args:
-            device_code: The device code to use for polling.
-
-        Returns:
-            str: The access token.
-
-        Raises:
-            GetAccessTokenError: If unable to get an access token.
-        """
-        sync_client = _get_httpx_client()
-        max_attempts = 12  # 1 minute (12 * 5 seconds)
-
-        access_token_url = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
-        client_id = os.getenv("GITHUB_COPILOT_CLIENT_ID", DEFAULT_GITHUB_CLIENT_ID)
-
-        for attempt in range(max_attempts):
-            try:
-                resp = sync_client.post(
-                    access_token_url,
-                    headers=self._get_github_headers(),
-                    json={
-                        "client_id": client_id,
-                        "device_code": device_code,
-                        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
-                    },
-                )
-                resp.raise_for_status()
-                resp_json = resp.json()
-
-                if "access_token" in resp_json:
-                    verbose_logger.info("Authentication successful!")
-                    return resp_json["access_token"]
-                elif "error" in resp_json and resp_json.get("error") == "authorization_pending":
-                    verbose_logger.debug(f"Authorization pending (attempt {attempt + 1}/{max_attempts})")
-                else:
-                    verbose_logger.warning(f"Unexpected response: {resp_json}")
-            except httpx.HTTPStatusError as e:
-                verbose_logger.error(f"HTTP error polling for access token: {str(e)}")
-                raise GetAccessTokenError(
-                    message=f"Failed to get access token: {str(e)}",
-                    status_code=400,
-                )
-            except json.JSONDecodeError as e:
-                verbose_logger.error(f"Error decoding JSON response: {str(e)}")
-                raise GetAccessTokenError(
-                    message=f"Failed to decode access token response: {str(e)}",
-                    status_code=400,
-                )
-            except Exception as e:
-                verbose_logger.error(f"Unexpected error polling for access token: {str(e)}")
-                raise GetAccessTokenError(
-                    message=f"Failed to get access token: {str(e)}",
-                    status_code=400,
-                )
-
-            time.sleep(5)
-
-        raise GetAccessTokenError(
-            message="Timed out waiting for user to authorize the device",
-            status_code=400,
-        )
-
     def _poll_for_access_token_once(self, device_code: str) -> Optional[str]:
         sync_client = _get_httpx_client()
         access_token_url = os.getenv("GITHUB_COPILOT_ACCESS_TOKEN_URL", DEFAULT_GITHUB_ACCESS_TOKEN_URL)
@@ -348,7 +213,9 @@ class Authenticator:
         except httpx.HTTPStatusError as e:
             raise GetAccessTokenError(message=f"Failed to get access token: {str(e)}", status_code=400) from e
         except (json.JSONDecodeError, TypeError) as e:
-            raise GetAccessTokenError(message=f"Failed to decode access token response: {str(e)}", status_code=400) from e
+            raise GetAccessTokenError(
+                message=f"Failed to decode access token response: {str(e)}", status_code=400
+            ) from e
 
         access_token = resp_json.get("access_token")
         if isinstance(access_token, str) and access_token:
@@ -357,29 +224,3 @@ class Authenticator:
             return None
         error = resp_json.get("error_description") or resp_json.get("error") or "Unexpected GitHub OAuth response"
         raise GetAccessTokenError(message=str(error), status_code=400)
-
-    def _login(self) -> str:
-        """
-        Login to GitHub Copilot using device code flow.
-
-        Returns:
-            str: The GitHub access token.
-
-        Raises:
-            GetDeviceCodeError: If unable to get a device code.
-            GetAccessTokenError: If unable to get an access token.
-        """
-        device_code_info = self._get_device_code()
-
-        device_code = device_code_info["device_code"]
-        user_code = device_code_info["user_code"]
-        verification_uri = device_code_info["verification_uri"]
-
-        print(  # noqa: T201
-            f"Please visit {verification_uri} and enter code {user_code} to authenticate.",
-            # When this is running in docker, it may not be flushed immediately
-            # so we force flush to ensure the user sees the message
-            flush=True,
-        )
-
-        return self._poll_for_access_token(device_code)
