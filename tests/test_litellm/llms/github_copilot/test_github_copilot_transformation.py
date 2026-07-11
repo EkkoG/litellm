@@ -34,8 +34,6 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
 
     config = GithubCopilotConfig()
     config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = "https://api.githubcopilot.com"
-    config.authenticator.get_api_key.return_value = "copilot-token"
 
     # Test with default values
     model = "github_copilot/gpt-4"
@@ -52,8 +50,10 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
     )
 
     assert api_base == "https://api.githubcopilot.com"
-    assert dynamic_api_key == "copilot-token"
+    assert dynamic_api_key is None
     assert custom_llm_provider == "github_copilot"
+    config.authenticator.get_api_base.assert_not_called()
+    config.authenticator.get_api_key.assert_not_called()
 
 
 @patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_base")

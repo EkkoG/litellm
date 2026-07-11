@@ -14,6 +14,7 @@ interface DeviceLoginResponse {
   verification_url: string;
   user_code: string;
   interval: number;
+  expires_at: number;
 }
 
 interface Props {
@@ -51,6 +52,8 @@ export default function GitHubCopilotCredentialDeviceLogin({
         }
       } catch (caughtError) {
         setError(deriveErrorMessage(caughtError));
+        setDeviceLogin(null);
+        setStatus("idle");
       } finally {
         pollInFlight.current = false;
         setIsPolling(false);
@@ -67,6 +70,20 @@ export default function GitHubCopilotCredentialDeviceLogin({
     );
     return () => window.clearInterval(intervalId);
   }, [deviceLogin, pollLogin, status]);
+
+  useEffect(() => {
+    if (!deviceLogin || status !== "pending") return;
+    const remainingMs = deviceLogin.expires_at * 1000 - Date.now();
+    const timeoutId = window.setTimeout(
+      () => {
+        setDeviceLogin(null);
+        setStatus("idle");
+        setError("GitHub device login expired. Start a new sign-in.");
+      },
+      Math.max(remainingMs, 0),
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [deviceLogin, status]);
 
   const startLogin = async () => {
     if (!accessToken || !credentialName) return;

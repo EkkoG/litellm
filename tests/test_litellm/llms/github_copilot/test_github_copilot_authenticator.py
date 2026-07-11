@@ -2,14 +2,17 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.llms.github_copilot.authenticator import Authenticator
+from litellm.llms.github_copilot.authenticator import (
+    MAX_CACHED_COPILOT_CREDENTIALS,
+    Authenticator,
+    CopilotCredential,
+)
 from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 
 
 @pytest.fixture(autouse=True)
 def clear_authenticator_cache():
     Authenticator._cache.clear()
-    Authenticator._refresh_locks.clear()
 
 
 def test_requires_managed_github_credential():
@@ -62,3 +65,21 @@ def test_device_flow_is_non_blocking(monkeypatch):
 
     assert Authenticator()._poll_for_access_token_once("device-code") is None
     client.post.assert_called_once()
+
+
+def test_prunes_expired_cache_entries():
+    Authenticator._cache["expired"] = CopilotCredential(token="token", expires_at=0, api_base=None)
+
+    Authenticator._prune_cache(1)
+
+    assert "expired" not in Authenticator._cache
+
+
+def test_cache_is_bounded():
+    for index in range(MAX_CACHED_COPILOT_CREDENTIALS + 1):
+        key = str(index)
+        Authenticator._cache[key] = CopilotCredential(token=key, expires_at=float(index + 100), api_base=None)
+
+    Authenticator._prune_cache(1)
+
+    assert len(Authenticator._cache) == MAX_CACHED_COPILOT_CREDENTIALS

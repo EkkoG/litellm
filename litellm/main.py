@@ -2385,6 +2385,8 @@ def _complete_custom_openai(
         copilot_auth = Authenticator()
         github_access_token = get_github_copilot_access_token(litellm_params)
         copilot_api_key = copilot_auth.get_api_key(github_access_token)
+        api_base = copilot_auth.get_api_base(github_access_token) or api_base
+        api_key = copilot_api_key
         copilot_headers = get_copilot_default_headers(copilot_api_key)
         if extra_headers:
             copilot_headers.update(extra_headers)
@@ -5321,6 +5323,8 @@ def completion(  # type: ignore
             azure_username=kwargs.get("azure_username"),
             azure_password=kwargs.get("azure_password"),
             azure_scope=kwargs.get("azure_scope"),
+            github_copilot_access_token=kwargs.get("github_copilot_access_token"),
+            litellm_credential_name=kwargs.get("litellm_credential_name"),
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
