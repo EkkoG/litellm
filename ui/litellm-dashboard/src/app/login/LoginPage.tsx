@@ -249,8 +249,8 @@ function LoginPageContent() {
                   optionType="button"
                   buttonStyle="solid"
                   options={[
-                    { label: "LiteLLM account", value: "local" },
                     { label: "LDAP", value: "ldap" },
+                    { label: "LiteLLM account", value: "local" },
                   ]}
                 />
               </Form.Item>
