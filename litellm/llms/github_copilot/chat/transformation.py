@@ -43,7 +43,7 @@ class GithubCopilotConfig(OpenAIConfig):
             or DEFAULT_GITHUB_COPILOT_API_BASE
         )
         try:
-            dynamic_api_key = self.authenticator.get_api_key()
+            dynamic_api_key = self.authenticator.get_api_key(api_key)
         except GetAPIKeyError as e:
             raise AuthenticationError(
                 model=model,
@@ -95,7 +95,7 @@ class GithubCopilotConfig(OpenAIConfig):
 
         # Add Copilot-specific headers (editor-version, user-agent, etc.)
         try:
-            copilot_api_key = self.authenticator.get_api_key()
+            copilot_api_key = self.authenticator.get_api_key(api_key)
             copilot_headers = get_copilot_default_headers(copilot_api_key)
             validated_headers = {**copilot_headers, **validated_headers}
         except GetAPIKeyError:

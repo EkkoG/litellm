@@ -201,7 +201,8 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         try:
             # Get GitHub Copilot API key via OAuth
-            api_key = self.authenticator.get_api_key()
+            github_access_token = litellm_params.api_key if litellm_params is not None else None
+            api_key = self.authenticator.get_api_key(github_access_token)
 
             if not api_key:
                 raise AuthenticationError(
