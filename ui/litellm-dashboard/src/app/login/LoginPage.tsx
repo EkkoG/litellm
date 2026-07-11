@@ -8,7 +8,7 @@ import { clearTokenCookies, getCookieFromDocument } from "@/utils/cookieUtils";
 import { isJwtExpired } from "@/utils/jwtUtils";
 import { consumeReturnUrl, getReturnUrl, isValidReturnUrl } from "@/utils/returnUrlUtils";
 import { InfoCircleOutlined, CloudServerOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Form, Input, Popover, Select, Space, Typography } from "antd";
+import { Alert, Button, Card, Divider, Form, Input, Radio, Select, Space, Typography } from "antd";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useWorker } from "@/hooks/useWorker";
@@ -16,6 +16,7 @@ import { useWorker } from "@/hooks/useWorker";
 function LoginPageContent() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [authMethod, setAuthMethod] = useState<"local" | "ldap">("local");
   const [isLoading, setIsLoading] = useState(true);
   const [form] = Form.useForm();
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
@@ -216,7 +217,7 @@ function LoginPageContent() {
 
           {error && <Alert message={error} type="error" showIcon />}
 
-          <Form form={form} onFinish={() => handleSubmit("local")} layout="vertical" requiredMark={false}>
+          <Form form={form} onFinish={() => handleSubmit(authMethod)} layout="vertical" requiredMark={false}>
             {uiConfig?.is_control_plane && workers.length > 0 && (
               <Form.Item label="Worker" style={{ marginBottom: 16 }}>
                 <Select
@@ -229,6 +230,27 @@ function LoginPageContent() {
                     label: w.name,
                     value: w.worker_id,
                   }))}
+                />
+              </Form.Item>
+            )}
+
+            {uiConfig?.ldap_configured && (
+              <Form.Item label="Sign in with">
+                <Radio.Group
+                  value={authMethod}
+                  onChange={(event) => {
+                    const nextAuthMethod: unknown = event.target.value;
+                    if (nextAuthMethod === "local" || nextAuthMethod === "ldap") {
+                      setAuthMethod(nextAuthMethod);
+                    }
+                  }}
+                  disabled={isLoginLoading}
+                  optionType="button"
+                  buttonStyle="solid"
+                  options={[
+                    { label: "LiteLLM account", value: "local" },
+                    { label: "Company directory", value: "ldap" },
+                  ]}
                 />
               </Form.Item>
             )}
@@ -273,73 +295,34 @@ function LoginPageContent() {
                 block
                 size="large"
               >
-                {isLoginLoading ? "Logging in..." : "Login"}
+                {isLoginLoading ? "Signing in..." : "Sign in"}
               </Button>
             </Form.Item>
-            {uiConfig?.ldap_configured && (
-              <Form.Item>
-                <Button
-                  disabled={isLoginLoading}
-                  loading={isLoginLoading}
-                  onClick={() => {
-                    void form
-                      .validateFields()
-                      .then(() => handleSubmit("ldap"))
-                      .catch(() => undefined);
-                  }}
-                  block
-                  size="large"
-                >
-                  Login with LDAP
-                </Button>
-              </Form.Item>
-            )}
-            <Form.Item>
-              {!uiConfig?.sso_configured ? (
-                <Popover content="Please configure SSO to log in with SSO." trigger="hover">
-                  <Button disabled block size="large">
-                    Login with SSO
-                  </Button>
-                </Popover>
-              ) : (
-                <Button
-                  disabled={isLoginLoading || (!!selectedWorkerId && workers.length === 0)}
-                  onClick={() => {
-                    const selectedWorker = workers.find((w) => w.worker_id === selectedWorkerId);
-                    if (selectedWorker) {
-                      // Store worker selection so useWorker hook restores it after redirect
-                      localStorage.setItem("litellm_selected_worker_id", selectedWorkerId!);
-                      switchToWorkerUrl(selectedWorker.url);
-                    }
-                    // SSO on the worker (or this instance if no worker), always
-                    // include return_to so the callback redirects back here
-                    const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
-                    const returnTo = encodeURIComponent(window.location.origin + "/ui/login");
-                    router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
-                  }}
-                  block
-                  size="large"
-                >
-                  Login with SSO
-                </Button>
-              )}
-            </Form.Item>
           </Form>
+
+          {uiConfig?.sso_configured && (
+            <div className="w-full">
+              <Divider plain>or</Divider>
+              <Button
+                disabled={isLoginLoading || (!!selectedWorkerId && workers.length === 0)}
+                onClick={() => {
+                  const selectedWorker = workers.find((w) => w.worker_id === selectedWorkerId);
+                  if (selectedWorker) {
+                    localStorage.setItem("litellm_selected_worker_id", selectedWorkerId!);
+                    switchToWorkerUrl(selectedWorker.url);
+                  }
+                  const ssoBase = selectedWorker?.url ?? getProxyBaseUrl();
+                  const returnTo = encodeURIComponent(window.location.origin + "/ui/login");
+                  router.push(`${ssoBase}/sso/key/generate?return_to=${returnTo}`);
+                }}
+                block
+                size="large"
+              >
+                Continue with SSO
+              </Button>
+            </div>
+          )}
         </Space>
-        {uiConfig?.sso_configured && (
-          <Alert
-            type="info"
-            showIcon
-            closable
-            message={
-              <Text>
-                Single Sign-On (SSO) is enabled. LiteLLM no longer automatically redirects to the SSO login flow upon
-                loading this page. To re-enable auto-redirect-to-SSO, set{" "}
-                <Text code>AUTO_REDIRECT_UI_LOGIN_TO_SSO=true</Text> in your environment configuration.
-              </Text>
-            }
-          />
-        )}
       </Card>
     </div>
   );
