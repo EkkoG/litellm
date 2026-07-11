@@ -93,6 +93,22 @@ def test_github_copilot_anthropic_messages_get_complete_url_normalizes_authentic
     assert url == "https://api.business.githubcopilot.com/v1/messages"
 
 
+def test_github_copilot_messages_url_fallback_uses_github_access_token():
+    config = GithubCopilotAnthropicMessagesConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = "https://api.githubcopilot.com"
+
+    config.get_complete_url(
+        api_base=None,
+        api_key="short-lived-copilot-token",
+        model="github_copilot/claude-haiku-4.5",
+        optional_params={},
+        litellm_params={"github_copilot_access_token": "github-oauth-token"},
+    )
+
+    config.authenticator.get_api_base.assert_called_once_with("github-oauth-token")
+
+
 def test_github_copilot_anthropic_messages_validate_environment():
     """Test environment validation and header injection."""
     config = GithubCopilotAnthropicMessagesConfig()

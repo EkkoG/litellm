@@ -7,7 +7,6 @@ from uuid import uuid4
 
 import httpx
 
-from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 # Constants
@@ -21,35 +20,8 @@ DEFAULT_GITHUB_COPILOT_API_BASE = "https://api.githubcopilot.com"
 def get_github_copilot_access_token(litellm_params: object) -> Optional[str]:
     if isinstance(litellm_params, Mapping):
         value = litellm_params.get("github_copilot_access_token")
-        credential_name = litellm_params.get("litellm_credential_name")
     else:
         value = getattr(litellm_params, "github_copilot_access_token", None)
-        credential_name = getattr(litellm_params, "litellm_credential_name", None)
-    safe_credential_name = (
-        credential_name.replace("\n", "").replace("\r", "") if isinstance(credential_name, str) else None
-    )
-    verbose_logger.warning(
-        "[DEBUG-copilot-auth] provider params: credential_name=%s direct_token_present=%s params_type=%s",
-        safe_credential_name,
-        isinstance(value, str) and bool(value),
-        type(litellm_params).__name__,
-    )
-    if not value and isinstance(credential_name, str) and credential_name:
-        from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
-
-        credential_values = CredentialAccessor.get_credential_values(credential_name)
-        verbose_logger.warning(
-            "[DEBUG-copilot-auth] credential lookup: credential_name=%s found=%s fields=%s",
-            safe_credential_name,
-            bool(credential_values),
-            sorted(credential_values.keys()),
-        )
-        value = credential_values.get("github_copilot_access_token")
-    verbose_logger.warning(
-        "[DEBUG-copilot-auth] token resolution: credential_name=%s token_present=%s",
-        safe_credential_name,
-        isinstance(value, str) and bool(value),
-    )
     return value if isinstance(value, str) and value else None
 
 

@@ -22,6 +22,7 @@ from litellm.constants import (
 ILLEGAL_DISPLAY_PARAMS = [
     "messages",
     "api_key",
+    "github_copilot_access_token",
     "prompt",
     "input",
     "vertex_credentials",

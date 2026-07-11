@@ -120,7 +120,10 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         reuse it to avoid a second authenticator read, falling back to a fresh
         resolution only if it was not provided.
         """
-        resolved = (api_base or self.authenticator.get_api_base(api_key) or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip("/")
+        github_access_token = get_github_copilot_access_token(litellm_params)
+        resolved = (
+            api_base or self.authenticator.get_api_base(github_access_token) or DEFAULT_GITHUB_COPILOT_API_BASE
+        ).rstrip("/")
         if not resolved.endswith("/v1/messages"):
             resolved = f"{resolved}/v1/messages"
         return resolved

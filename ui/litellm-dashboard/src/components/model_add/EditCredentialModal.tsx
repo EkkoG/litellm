@@ -6,7 +6,7 @@ import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { CredentialItem } from "../networking";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import { normalizeCredentialProvider, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 import ChatGPTCredentialDeviceLogin from "./ChatGPTCredentialDeviceLogin";
 import GitHubCopilotCredentialDeviceLogin from "./GitHubCopilotCredentialDeviceLogin";
 const { Link } = Typography;
@@ -73,11 +73,7 @@ export default function EditCredentialsModal({
   useEffect(() => {
     if (existingCredential) {
       const storedProvider = existingCredential.credential_info.custom_llm_provider;
-      const managedProviderMap: Record<string, Providers> = {
-        chatgpt: Providers.ChatGPT,
-        github_copilot: Providers.GITHUB_COPILOT,
-      };
-      const provider = storedProvider ? (managedProviderMap[storedProvider] ?? (storedProvider as Providers)) : undefined;
+      const provider = normalizeCredentialProvider(storedProvider);
       if (!provider) {
         return;
       }

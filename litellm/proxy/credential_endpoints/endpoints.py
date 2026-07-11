@@ -2,9 +2,11 @@
 CRUD endpoints for storing reusable credentials.
 """
 
+import asyncio
 import time
 import uuid
-from typing import Optional
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import BaseModel
@@ -18,9 +20,9 @@ from litellm.llms.chatgpt.common_utils import CHATGPT_DEVICE_VERIFY_URL, GetAcce
 from litellm.llms.github_copilot.authenticator import Authenticator as GitHubCopilotAuthenticator
 from litellm.llms.github_copilot.common_utils import GetAccessTokenError as GitHubGetAccessTokenError
 from litellm.llms.github_copilot.common_utils import GetDeviceCodeError as GitHubGetDeviceCodeError
-from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.credential_endpoints.chatgpt_credential_utils import build_chatgpt_credential_values
 from litellm.proxy.utils import handle_exception_on_proxy, jsonify_object
 from litellm.repositories.credentials_repository import CredentialsRepository
@@ -62,7 +64,9 @@ class GitHubCopilotDeviceLoginState(BaseModel):
     expires_at: float
 
 
+GITHUB_COPILOT_DEVICE_LOGIN_CACHE_PREFIX = "github_copilot_device_login"
 _github_copilot_device_login_flows: dict[str, GitHubCopilotDeviceLoginState] = {}
+_github_copilot_device_login_locks: dict[str, asyncio.Lock] = {}
 
 
 class CredentialHelperUtils:
@@ -157,6 +161,16 @@ def _chatgpt_device_login_user_id(user_api_key_dict: UserAPIKeyAuth) -> Optional
     return user_api_key_dict.user_id or user_api_key_dict.key_alias or user_api_key_dict.token
 
 
+def _github_copilot_device_login_user_id(user_api_key_dict: UserAPIKeyAuth) -> Optional[str]:
+    if user_api_key_dict.user_id:
+        return user_api_key_dict.user_id
+    if user_api_key_dict.key_alias:
+        return user_api_key_dict.key_alias
+    if user_api_key_dict.token:
+        return hash_token(user_api_key_dict.token)
+    return None
+
+
 def _cleanup_expired_chatgpt_device_login_flows() -> None:
     now = time.time()
     expired_login_ids = [login_id for login_id, state in _chatgpt_device_login_flows.items() if state.expires_at <= now]
@@ -164,13 +178,88 @@ def _cleanup_expired_chatgpt_device_login_flows() -> None:
         _chatgpt_device_login_flows.pop(login_id, None)
 
 
-def _cleanup_expired_github_copilot_device_login_flows() -> None:
-    now = time.time()
-    expired_login_ids = [
-        login_id for login_id, state in _github_copilot_device_login_flows.items() if state.expires_at <= now
-    ]
-    for login_id in expired_login_ids:
-        _github_copilot_device_login_flows.pop(login_id, None)
+def _github_copilot_device_login_cache_key(login_id: str) -> str:
+    return f"{GITHUB_COPILOT_DEVICE_LOGIN_CACHE_PREFIX}:{login_id}"
+
+
+async def _store_github_copilot_device_login_state(login_id: str, state: GitHubCopilotDeviceLoginState) -> None:
+    from litellm.proxy.proxy_server import redis_usage_cache
+
+    ttl = max(1, int(state.expires_at - time.time()))
+    if redis_usage_cache is None:
+        _github_copilot_device_login_flows[login_id] = state
+        return
+    encrypted_state = encrypt_value_helper(state.model_dump_json())
+    if not isinstance(encrypted_state, str):
+        raise HTTPException(status_code=500, detail="Unable to secure GitHub Copilot device login state")
+    await redis_usage_cache.async_set_cache(_github_copilot_device_login_cache_key(login_id), encrypted_state, ttl=ttl)
+
+
+async def _get_github_copilot_device_login_state(
+    login_id: str,
+) -> Optional[GitHubCopilotDeviceLoginState]:
+    from litellm.proxy.proxy_server import redis_usage_cache
+
+    if redis_usage_cache is None:
+        value = _github_copilot_device_login_flows.get(login_id)
+        state = value if isinstance(value, GitHubCopilotDeviceLoginState) else None
+    else:
+        encrypted_state = await redis_usage_cache.async_get_cache(_github_copilot_device_login_cache_key(login_id))
+        if not isinstance(encrypted_state, str):
+            return None
+        decrypted_state = decrypt_value_helper(
+            encrypted_state,
+            key="github_copilot_device_login_state",
+            exception_type="debug",
+        )
+        state = GitHubCopilotDeviceLoginState.model_validate_json(decrypted_state) if decrypted_state else None
+    if state is None:
+        return None
+    if state.expires_at <= time.time():
+        await _delete_github_copilot_device_login_state(login_id)
+        return None
+    return state
+
+
+async def _delete_github_copilot_device_login_state(login_id: str) -> None:
+    from litellm.proxy.proxy_server import redis_usage_cache
+
+    _github_copilot_device_login_flows.pop(login_id, None)
+    if redis_usage_cache is not None:
+        await redis_usage_cache.async_delete_cache(_github_copilot_device_login_cache_key(login_id))
+
+
+@asynccontextmanager
+async def _claim_github_copilot_device_login_state(
+    login_id: str,
+) -> AsyncIterator[Optional[GitHubCopilotDeviceLoginState]]:
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+    from litellm.proxy.proxy_server import redis_usage_cache
+
+    if redis_usage_cache is not None:
+        lock_manager = PodLockManager(redis_cache=redis_usage_cache)
+        lock_id = f"github_copilot_device_login:{login_id}"
+        acquired = await lock_manager.acquire_lock(lock_id, ttl=30)
+        if not acquired:
+            yield None
+            return
+        try:
+            yield await _get_github_copilot_device_login_state(login_id)
+        finally:
+            await lock_manager.release_lock(lock_id)
+        return
+
+    local_lock = _github_copilot_device_login_locks.setdefault(login_id, asyncio.Lock())
+    if local_lock.locked():
+        yield None
+        return
+    await local_lock.acquire()
+    try:
+        yield await _get_github_copilot_device_login_state(login_id)
+    finally:
+        local_lock.release()
+        if login_id not in _github_copilot_device_login_flows:
+            _github_copilot_device_login_locks.pop(login_id, None)
 
 
 async def _store_chatgpt_credential(
@@ -386,7 +475,6 @@ async def start_github_copilot_device_login(
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
-    _cleanup_expired_github_copilot_device_login_flows()
     if not body.overwrite_existing:
         existing_credential = await CredentialsRepository(prisma_client).find_by_name(body.credential_name)
         if existing_credential is not None:
@@ -400,14 +488,15 @@ async def start_github_copilot_device_login(
     login_id = str(uuid.uuid4())
     interval = int(device_code.get("interval", "5"))
     expires_at = time.time() + int(device_code.get("expires_in", "900"))
-    _github_copilot_device_login_flows[login_id] = GitHubCopilotDeviceLoginState(
+    login_state = GitHubCopilotDeviceLoginState(
         credential_name=body.credential_name,
         overwrite_existing=body.overwrite_existing,
-        user_id=_chatgpt_device_login_user_id(user_api_key_dict),
+        user_id=_github_copilot_device_login_user_id(user_api_key_dict),
         device_code=device_code["device_code"],
         interval=interval,
         expires_at=expires_at,
     )
+    await _store_github_copilot_device_login_state(login_id, login_state)
     return {
         "success": True,
         "login_id": login_id,
@@ -429,33 +518,33 @@ async def poll_github_copilot_device_login(
     body: ChatGPTDeviceLoginPollRequest,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    _cleanup_expired_github_copilot_device_login_flows()
-    login_state = _github_copilot_device_login_flows.get(body.login_id)
-    if login_state is None:
-        raise HTTPException(status_code=404, detail="GitHub Copilot device login not found or expired")
-    if login_state.user_id != _chatgpt_device_login_user_id(user_api_key_dict):
-        raise HTTPException(status_code=403, detail="GitHub Copilot device login belongs to another user")
+    async with _claim_github_copilot_device_login_state(body.login_id) as login_state:
+        if login_state is None:
+            raise HTTPException(status_code=409, detail="GitHub Copilot device login is busy, missing, or expired")
+        if login_state.user_id != _github_copilot_device_login_user_id(user_api_key_dict):
+            raise HTTPException(status_code=403, detail="GitHub Copilot device login belongs to another user")
 
-    try:
-        access_token = GitHubCopilotAuthenticator()._poll_for_access_token_once(login_state.device_code)
-    except GitHubGetAccessTokenError as e:
-        raise HTTPException(status_code=e.status_code, detail=str(e)) from e
-    if access_token is None:
-        return {
-            "success": True,
-            "status": "pending",
-            "interval": login_state.interval,
-            "expires_at": login_state.expires_at,
-        }
+        try:
+            access_token = GitHubCopilotAuthenticator()._poll_for_access_token_once(login_state.device_code)
+        except GitHubGetAccessTokenError as e:
+            await _delete_github_copilot_device_login_state(body.login_id)
+            raise HTTPException(status_code=e.status_code, detail=str(e)) from e
+        if access_token is None:
+            return {
+                "success": True,
+                "status": "pending",
+                "interval": login_state.interval,
+                "expires_at": login_state.expires_at,
+            }
 
-    await _store_github_copilot_credential(
-        credential_name=login_state.credential_name,
-        access_token=access_token,
-        user_id=login_state.user_id,
-        overwrite_existing=login_state.overwrite_existing,
-    )
-    _github_copilot_device_login_flows.pop(body.login_id, None)
-    return {"success": True, "status": "complete", "credential_name": login_state.credential_name}
+        await _store_github_copilot_credential(
+            credential_name=login_state.credential_name,
+            access_token=access_token,
+            user_id=login_state.user_id,
+            overwrite_existing=login_state.overwrite_existing,
+        )
+        await _delete_github_copilot_device_login_state(body.login_id)
+        return {"success": True, "status": "complete", "credential_name": login_state.credential_name}
 
 
 @router.get(

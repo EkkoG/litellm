@@ -5,7 +5,7 @@ import React, { useState } from "react";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
 import { Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import { normalizeCredentialProvider, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 import ChatGPTCredentialDeviceLogin from "./ChatGPTCredentialDeviceLogin";
 import GitHubCopilotCredentialDeviceLogin from "./GitHubCopilotCredentialDeviceLogin";
 const { Link } = Typography;
@@ -28,10 +28,10 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   initialProvider = Providers.OpenAI,
 }) => {
   const [form] = Form.useForm();
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(initialProvider);
+  const normalizedInitialProvider = normalizeCredentialProvider(initialProvider) ?? Providers.OpenAI;
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(normalizedInitialProvider);
   const credentialName = Form.useWatch("credential_name", form);
-  const isGitHubCopilot =
-    selectedProvider === Providers.GITHUB_COPILOT || selectedProvider === ("GITHUB_COPILOT" as Providers);
+  const isGitHubCopilot = selectedProvider === Providers.GITHUB_COPILOT;
 
   const renderCredentialFields = () => {
     if (selectedProvider === Providers.ChatGPT) {
@@ -76,12 +76,13 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
       }}
       footer={null}
       width={600}
+      destroyOnHidden
     >
       <Form
         form={form}
         onFinish={handleSubmit}
         layout="vertical"
-        initialValues={{ custom_llm_provider: initialProvider }}
+        initialValues={{ custom_llm_provider: normalizedInitialProvider }}
       >
         {/* Credential Name */}
         <Form.Item

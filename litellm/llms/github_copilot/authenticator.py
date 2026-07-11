@@ -23,6 +23,8 @@ DEFAULT_GITHUB_CLIENT_ID = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 DEFAULT_GITHUB_API_KEY_URL = "https://api.github.com/copilot_internal/v2/token"
+MAX_CACHED_COPILOT_CREDENTIALS = 256
+COPILOT_REFRESH_LOCK_STRIPES = 256
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,8 +36,19 @@ class CopilotCredential:
 
 class Authenticator:
     _cache: dict[str, CopilotCredential] = {}
-    _refresh_locks: dict[str, threading.Lock] = {}
+    _refresh_locks: tuple[threading.Lock, ...] = tuple(threading.Lock() for _ in range(COPILOT_REFRESH_LOCK_STRIPES))
     _cache_lock = threading.Lock()
+
+    @classmethod
+    def _prune_cache(cls, now: float) -> None:
+        expired_keys = tuple(key for key, value in cls._cache.items() if value.expires_at <= now)
+        overflow = max(0, len(cls._cache) - MAX_CACHED_COPILOT_CREDENTIALS)
+        oldest_keys = tuple(
+            key for key, _ in sorted(cls._cache.items(), key=lambda item: item[1].expires_at)[:overflow]
+        )
+        keys_to_remove = frozenset((*expired_keys, *oldest_keys))
+        for key in keys_to_remove:
+            cls._cache.pop(key, None)
 
     def get_api_key(self, github_access_token: Optional[str]) -> str:
         return self._get_copilot_credential(github_access_token).token
@@ -53,10 +66,12 @@ class Authenticator:
                 status_code=401,
             )
         cache_key = hashlib.sha256(github_access_token.encode()).hexdigest()
+        now = datetime.now().timestamp()
         with self._cache_lock:
+            self._prune_cache(now)
             cached = self._cache.get(cache_key)
-            refresh_lock = self._refresh_locks.setdefault(cache_key, threading.Lock())
-        if cached is not None and cached.expires_at > datetime.now().timestamp() + 60:
+            refresh_lock = self._refresh_locks[int(cache_key[:8], 16) % COPILOT_REFRESH_LOCK_STRIPES]
+        if cached is not None and cached.expires_at > now + 60:
             return cached
         with refresh_lock:
             with self._cache_lock:
@@ -80,6 +95,7 @@ class Authenticator:
             credential = CopilotCredential(token=token, expires_at=resolved_expires_at, api_base=api_base)
             with self._cache_lock:
                 self._cache[cache_key] = credential
+                self._prune_cache(datetime.now().timestamp())
         return credential
 
     def _refresh_api_key(self, github_access_token: str) -> Dict[str, Any]:
@@ -107,7 +123,7 @@ class Authenticator:
                 if "token" in response_json:
                     return response_json
                 else:
-                    verbose_logger.warning(f"API key response missing token: {response_json}")
+                    verbose_logger.warning("GitHub Copilot API key response missing token")
             except httpx.HTTPStatusError as e:
                 verbose_logger.error(f"HTTP error refreshing API key (attempt {attempt + 1}/{max_retries}): {str(e)}")
             except Exception as e:
@@ -168,7 +184,7 @@ class Authenticator:
 
             required_fields = ["device_code", "user_code", "verification_uri"]
             if not all(field in resp_json for field in required_fields):
-                verbose_logger.error(f"Response missing required fields: {resp_json}")
+                verbose_logger.error("GitHub device code response missing required fields")
                 raise GetDeviceCodeError(
                     message="Response missing required fields",
                     status_code=400,
