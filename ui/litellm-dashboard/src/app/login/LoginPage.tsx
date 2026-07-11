@@ -16,7 +16,7 @@ import { useWorker } from "@/hooks/useWorker";
 function LoginPageContent() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
-  const [authMethod, setAuthMethod] = useState<"local" | "ldap">("local");
+  const [selectedAuthMethod, setSelectedAuthMethod] = useState<"local" | "ldap" | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [form] = Form.useForm();
   const { data: uiConfig, isLoading: isConfigLoading } = useUIConfig();
@@ -138,6 +138,7 @@ function LoginPageContent() {
 
   const error = loginMutation.error instanceof Error ? loginMutation.error.message : null;
   const isLoginLoading = loginMutation.isPending;
+  const authMethod = selectedAuthMethod ?? (uiConfig?.ldap_configured ? "ldap" : "local");
 
   const { Title, Text, Paragraph } = Typography;
 
@@ -241,7 +242,7 @@ function LoginPageContent() {
                   onChange={(event) => {
                     const nextAuthMethod: unknown = event.target.value;
                     if (nextAuthMethod === "local" || nextAuthMethod === "ldap") {
-                      setAuthMethod(nextAuthMethod);
+                      setSelectedAuthMethod(nextAuthMethod);
                     }
                   }}
                   disabled={isLoginLoading}
@@ -249,7 +250,7 @@ function LoginPageContent() {
                   buttonStyle="solid"
                   options={[
                     { label: "LiteLLM account", value: "local" },
-                    { label: "Company directory", value: "ldap" },
+                    { label: "LDAP", value: "ldap" },
                   ]}
                 />
               </Form.Item>
