@@ -39,6 +39,8 @@ OPTIONAL_KWARGS_KEYS = frozenset(
         "chatgpt_id_token",
         "chatgpt_account_id",
         "chatgpt_expires_at",
+        "github_copilot_access_token",
+        "litellm_credential_name",
         "tpm",
         "rpm",
         "itpm",

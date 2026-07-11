@@ -1,6 +1,19 @@
 import type { FormInstance } from "antd";
 import { Providers } from "../provider_info_helpers";
 
+const managedProviderMap: Readonly<Record<string, Providers>> = {
+  chatgpt: Providers.ChatGPT,
+  ChatGPT: Providers.ChatGPT,
+  github_copilot: Providers.GITHUB_COPILOT,
+  GITHUB_COPILOT: Providers.GITHUB_COPILOT,
+  [Providers.GITHUB_COPILOT]: Providers.GITHUB_COPILOT,
+};
+
+export function normalizeCredentialProvider(provider: string | Providers | undefined): Providers | undefined {
+  if (!provider) return undefined;
+  return managedProviderMap[provider] ?? (provider as Providers);
+}
+
 /**
  * Reset the credential form when the user switches providers.
  *

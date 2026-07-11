@@ -37,14 +37,8 @@ class GithubCopilotConfig(OpenAIConfig):
         custom_llm_provider: str,
         litellm_params: object = None,
     ) -> Tuple[str | None, str | None, str]:
-        github_access_token = get_github_copilot_access_token(litellm_params)
-        dynamic_api_base = (
-            self.authenticator.get_api_base(github_access_token)
-            or os.getenv("GITHUB_COPILOT_API_BASE")
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
-        dynamic_api_key = self.authenticator.get_api_key(github_access_token)
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        dynamic_api_base = os.getenv("GITHUB_COPILOT_API_BASE") or DEFAULT_GITHUB_COPILOT_API_BASE
+        return dynamic_api_base, None, custom_llm_provider
 
     def _transform_messages(
         self,
