@@ -77,7 +77,10 @@ export default function EditCredentialsModal({
         chatgpt: Providers.ChatGPT,
         github_copilot: Providers.GITHUB_COPILOT,
       };
-      const provider = managedProviderMap[storedProvider] ?? (storedProvider as Providers);
+      const provider = storedProvider ? (managedProviderMap[storedProvider] ?? (storedProvider as Providers)) : undefined;
+      if (!provider) {
+        return;
+      }
       if (provider === Providers.ChatGPT || provider === Providers.GITHUB_COPILOT) {
         form.setFieldsValue({
           credential_name: existingCredential.credential_name,
