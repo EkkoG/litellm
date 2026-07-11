@@ -260,10 +260,10 @@ describe("LoginPage", () => {
       expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("button", { name: "Login with SSO" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue with SSO" })).toBeInTheDocument();
   });
 
-  it("should show disabled Login with SSO button with popover when sso_configured is false", async () => {
+  it("should hide the SSO action when sso_configured is false", async () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         auto_redirect_to_sso: false,
@@ -287,12 +287,10 @@ describe("LoginPage", () => {
       expect(screen.getByRole("heading", { name: "Login" })).toBeInTheDocument();
     });
 
-    const ssoButton = screen.getByRole("button", { name: "Login with SSO" });
-    expect(ssoButton).toBeInTheDocument();
-    expect(ssoButton).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Continue with SSO" })).not.toBeInTheDocument();
   });
 
-  it("should show Login with LDAP button and submit ldap auth method when ldap_configured is true", async () => {
+  it("should allow selecting LDAP and submit it through the single sign-in button", async () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         auto_redirect_to_sso: false,
@@ -314,12 +312,14 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Login with LDAP" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Company directory" })).toBeInTheDocument();
     });
+    expect(screen.getAllByRole("button", { name: "Sign in" })).toHaveLength(1);
 
     fireEvent.change(screen.getByLabelText("Username"), { target: { value: "alice" } });
     fireEvent.change(screen.getByLabelText("Password"), { target: { value: "ldap-password" } });
-    fireEvent.click(screen.getByRole("button", { name: "Login with LDAP" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Company directory" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(mockLoginMutate).toHaveBeenCalledWith(
@@ -334,7 +334,48 @@ describe("LoginPage", () => {
     });
   });
 
-  it("should validate required fields before LDAP login", async () => {
+  it("should use local authentication by default when LDAP is configured", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: false,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: false,
+        ldap_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    (isJwtExpired as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    const localAuthOption = await screen.findByRole("radio", { name: "LiteLLM account" });
+    expect(localAuthOption).toBeChecked();
+
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "local-password" } });
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
+
+    await waitFor(() => {
+      expect(mockLoginMutate).toHaveBeenCalledWith(
+        {
+          username: "admin",
+          password: "local-password",
+          authMethod: "local",
+          useV3: false,
+        },
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("should validate required fields before directory login", async () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
       data: {
         auto_redirect_to_sso: false,
@@ -356,10 +397,11 @@ describe("LoginPage", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: "Login with LDAP" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "Company directory" })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Login with LDAP" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Company directory" }));
+    fireEvent.click(screen.getByRole("button", { name: "Sign in" }));
 
     await waitFor(() => {
       expect(screen.getByText("Please enter your username")).toBeInTheDocument();
