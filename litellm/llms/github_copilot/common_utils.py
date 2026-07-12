@@ -75,7 +75,7 @@ def get_copilot_default_headers(api_key: str) -> dict:
         "Authorization": f"Bearer {api_key}",
         "content-type": "application/json",
         "copilot-integration-id": "vscode-chat",
-        "editor-version": "vscode/1.95.0",  # Fixed version for stability
+        "editor-version": "vscode/1.128.0",  # Fixed version for stability
         "editor-plugin-version": EDITOR_PLUGIN_VERSION,
         "user-agent": USER_AGENT,
         "openai-intent": "conversation-panel",
