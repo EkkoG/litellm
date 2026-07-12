@@ -113,23 +113,24 @@ describe("AddCredentialModal", () => {
 
   it("should render ChatGPT device login instead of credential fields", async () => {
     const queryClient = createQueryClient();
-    const onCancel = vi.fn();
-    const onAddCredential = vi.fn();
+    const user = userEvent.setup({ delay: null });
 
     render(
       <QueryClientProvider client={queryClient}>
-        <AddCredentialModal
-          open={true}
-          onCancel={onCancel}
-          onAddCredential={onAddCredential}
-          uploadProps={mockUploadProps}
-          initialProvider={Providers.ChatGPT}
-        />
+        <AddCredentialModal open={true} onCancel={vi.fn()} onAddCredential={vi.fn()} uploadProps={mockUploadProps} />
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
+    const providerSelect = screen.getByLabelText("Provider:");
+    await user.click(providerSelect);
+    await user.type(providerSelect, "chatgpt");
+    await user.click(await screen.findByText("ChatGPT", { selector: "span" }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument();
+      expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add Credential" })).not.toBeInTheDocument();
+    });
   });
 
   it("should render GitHub Copilot device login when selected from the provider dropdown", async () => {

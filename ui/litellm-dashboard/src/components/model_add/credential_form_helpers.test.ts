@@ -1,13 +1,7 @@
 import type { FormInstance } from "antd";
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
-import { normalizeCredentialProvider, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
-
-describe("normalizeCredentialProvider", () => {
-  it.each(["github_copilot", "GITHUB_COPILOT", Providers.GITHUB_COPILOT])("normalizes %s", (provider) => {
-    expect(normalizeCredentialProvider(provider)).toBe(Providers.GITHUB_COPILOT);
-  });
-});
+import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 
 /**
  * Build a minimal FormInstance stub that records calls. We don't depend

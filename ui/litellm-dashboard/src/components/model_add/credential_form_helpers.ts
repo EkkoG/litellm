@@ -1,19 +1,6 @@
 import type { FormInstance } from "antd";
 import { Providers } from "../provider_info_helpers";
 
-const managedProviderMap: Readonly<Record<string, Providers>> = {
-  chatgpt: Providers.ChatGPT,
-  ChatGPT: Providers.ChatGPT,
-  github_copilot: Providers.GITHUB_COPILOT,
-  GITHUB_COPILOT: Providers.GITHUB_COPILOT,
-  [Providers.GITHUB_COPILOT]: Providers.GITHUB_COPILOT,
-};
-
-export function normalizeCredentialProvider(provider: string | Providers | undefined): Providers | undefined {
-  if (!provider) return undefined;
-  return managedProviderMap[provider] ?? (provider as Providers);
-}
-
 /**
  * Reset the credential form when the user switches providers.
  *
@@ -33,16 +20,14 @@ export function normalizeCredentialProvider(provider: string | Providers | undef
  */
 export function resetCredentialFormOnProviderChange(
   form: FormInstance,
-  newProvider: string | Providers,
+  newProvider: Providers,
   setSelectedProvider: (p: Providers) => void,
 ): void {
-  const normalizedProvider = normalizeCredentialProvider(newProvider);
-  if (!normalizedProvider) return;
   const preservedName = form.getFieldValue("credential_name");
   form.resetFields();
   if (preservedName !== undefined) {
     form.setFieldValue("credential_name", preservedName);
   }
-  setSelectedProvider(normalizedProvider);
-  form.setFieldValue("custom_llm_provider", normalizedProvider);
+  setSelectedProvider(newProvider);
+  form.setFieldValue("custom_llm_provider", newProvider);
 }

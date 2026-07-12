@@ -2567,43 +2567,18 @@ export const credentialCreateCall = async (
 
 export const chatgptCredentialDeviceStartCall = async (
   accessToken: string,
-  formValues: {
-    credential_name: string;
-    api_base?: string | null;
-    overwrite_existing?: boolean;
-  },
-) => {
-  try {
-    return await apiClient.post(`/credentials/chatgpt/device/start`, {
-      accessToken,
-      body: {
-        ...formValues,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to start ChatGPT device login:", error);
-    throw error;
-  }
-};
+  formValues: { credential_name: string; overwrite_existing?: boolean },
+) =>
+  apiClient.post(`/credentials/chatgpt/device/start`, {
+    accessToken,
+    body: formValues,
+  });
 
-export const chatgptCredentialDevicePollCall = async (
-  accessToken: string,
-  formValues: {
-    login_id: string;
-  },
-) => {
-  try {
-    return await apiClient.post(`/credentials/chatgpt/device/poll`, {
-      accessToken,
-      body: {
-        ...formValues,
-      },
-    });
-  } catch (error) {
-    console.error("Failed to poll ChatGPT device login:", error);
-    throw error;
-  }
-};
+export const chatgptCredentialDevicePollCall = async (accessToken: string, formValues: { login_id: string }) =>
+  apiClient.post(`/credentials/chatgpt/device/poll`, {
+    accessToken,
+    body: formValues,
+  });
 
 export const githubCopilotCredentialDeviceStartCall = async (
   accessToken: string,

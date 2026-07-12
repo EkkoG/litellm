@@ -3,9 +3,9 @@ import { Select as AntdSelect, Button, Form, Modal, Tooltip, Typography } from "
 import type { UploadProps } from "antd/es/upload";
 import React, { useState } from "react";
 import ProviderSpecificFields from "../add_model/provider_specific_fields";
-import { Providers, providerLogoMap } from "../provider_info_helpers";
+import { provider_map, Providers, providerLogoMap } from "../provider_info_helpers";
 import { resolveLogoSrc } from "@/lib/assetPaths";
-import { normalizeCredentialProvider, resetCredentialFormOnProviderChange } from "./credential_form_helpers";
+import { resetCredentialFormOnProviderChange } from "./credential_form_helpers";
 import ChatGPTCredentialDeviceLogin from "./ChatGPTCredentialDeviceLogin";
 import GitHubCopilotCredentialDeviceLogin from "./GitHubCopilotCredentialDeviceLogin";
 const { Link } = Typography;
@@ -15,8 +15,7 @@ interface AddCredentialsModalProps {
   onCancel: () => void;
   onAddCredential: (values: any) => void;
   uploadProps: UploadProps;
-  onChatGPTCredentialCreated?: () => void;
-  initialProvider?: Providers;
+  onCredentialCreated?: () => void;
 }
 
 const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
@@ -24,22 +23,22 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
   onCancel,
   onAddCredential,
   uploadProps,
-  onChatGPTCredentialCreated,
-  initialProvider = Providers.OpenAI,
+  onCredentialCreated,
 }) => {
   const [form] = Form.useForm();
-  const normalizedInitialProvider = normalizeCredentialProvider(initialProvider) ?? Providers.OpenAI;
-  const [selectedProvider, setSelectedProvider] = useState<Providers>(normalizedInitialProvider);
+  const [selectedProvider, setSelectedProvider] = useState<Providers>(Providers.OpenAI);
   const credentialName = Form.useWatch("credential_name", form);
-  const isGitHubCopilot = selectedProvider === Providers.GITHUB_COPILOT;
+  const selectedProviderId = provider_map[selectedProvider as keyof typeof provider_map] ?? selectedProvider;
+  const isChatGPT = selectedProviderId === provider_map.ChatGPT;
+  const isGitHubCopilot = selectedProviderId === provider_map.GITHUB_COPILOT;
 
   const renderCredentialFields = () => {
-    if (selectedProvider === Providers.ChatGPT) {
+    if (isChatGPT) {
       return (
         <ChatGPTCredentialDeviceLogin
           credentialName={credentialName}
           overwriteExisting={false}
-          onComplete={onChatGPTCredentialCreated}
+          onComplete={onCredentialCreated}
         />
       );
     }
@@ -48,7 +47,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
         <GitHubCopilotCredentialDeviceLogin
           credentialName={credentialName}
           overwriteExisting={false}
-          onComplete={onChatGPTCredentialCreated}
+          onComplete={onCredentialCreated}
         />
       );
     }
@@ -76,14 +75,8 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
       }}
       footer={null}
       width={600}
-      destroyOnHidden
     >
-      <Form
-        form={form}
-        onFinish={handleSubmit}
-        layout="vertical"
-        initialValues={{ custom_llm_provider: normalizedInitialProvider }}
-      >
+      <Form form={form} onFinish={handleSubmit} layout="vertical">
         {/* Credential Name */}
         <Form.Item
           label="Credential Name:"
@@ -150,9 +143,7 @@ const AddCredentialsModal: React.FC<AddCredentialsModalProps> = ({
             >
               Cancel
             </Button>
-            {selectedProvider !== Providers.ChatGPT && !isGitHubCopilot && (
-              <Button htmlType="submit">{"Add Credential"}</Button>
-            )}
+            {!isChatGPT && !isGitHubCopilot && <Button htmlType="submit">{"Add Credential"}</Button>}
           </div>
         </div>
       </Form>
