@@ -5,7 +5,16 @@ from fastapi import HTTPException
 
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.credential_endpoints import endpoints
-from litellm.proxy.credential_endpoints.device_login_flow import DeviceLoginCompleted, DeviceLoginStarted
+from litellm.proxy.credential_endpoints.device_login_flow import (
+    DeviceLoginCompleted,
+    DeviceLoginStarted,
+    InMemoryDeviceLoginStateStore,
+)
+from litellm.proxy.credential_endpoints.device_login_state_store import (
+    DatabaseDeviceLoginStateStore,
+    DatabaseDeviceLoginStateTable,
+    RedisDeviceLoginStateStore,
+)
 
 
 @pytest.mark.asyncio
@@ -98,37 +107,24 @@ async def test_chatgpt_device_login_rejects_private_api_base():
     assert exc_info.value.status_code == 400
 
 
-def test_device_login_requires_shared_state_for_multiple_workers(monkeypatch):
-    monkeypatch.setenv("NUM_WORKERS", "2")
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", Mock())
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", None)
+def test_device_login_uses_database_state_when_redis_is_not_configured():
+    table = Mock(spec=DatabaseDeviceLoginStateTable)
+    writer_db = Mock()
+    writer_db.litellm_deviceloginstate = table
+    prisma_client = Mock(writer_db=writer_db)
 
-    with pytest.raises(HTTPException) as exc_info:
-        endpoints._build_device_login_flow()
+    state_store = endpoints._build_device_login_state_store(prisma_client, None)
 
-    assert exc_info.value.status_code == 503
-
-
-def test_device_login_requires_shared_state_by_default(monkeypatch):
-    monkeypatch.delenv("NUM_WORKERS", raising=False)
-    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
-    monkeypatch.delenv("LITELLM_ALLOW_IN_MEMORY_DEVICE_LOGIN", raising=False)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", Mock())
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", None)
-
-    with pytest.raises(HTTPException) as exc_info:
-        endpoints._build_device_login_flow()
-
-    assert exc_info.value.status_code == 503
+    assert isinstance(state_store, DatabaseDeviceLoginStateStore)
+    assert not isinstance(state_store, InMemoryDeviceLoginStateStore)
 
 
-def test_device_login_allows_explicit_single_process_development_store(monkeypatch):
-    monkeypatch.setenv("LITELLM_ALLOW_IN_MEMORY_DEVICE_LOGIN", "true")
-    monkeypatch.setenv("NUM_WORKERS", "1")
-    monkeypatch.delenv("WEB_CONCURRENCY", raising=False)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", Mock())
-    monkeypatch.setattr("litellm.proxy.proxy_server.redis_usage_cache", None)
+def test_device_login_prefers_redis_state_when_configured():
+    writer_db = Mock()
+    prisma_client = Mock(writer_db=writer_db)
+    redis_cache = Mock()
 
-    flow = endpoints._build_device_login_flow()
+    state_store = endpoints._build_device_login_state_store(prisma_client, redis_cache)
 
-    assert flow is not None
+    assert isinstance(state_store, RedisDeviceLoginStateStore)
+    assert not isinstance(state_store, InMemoryDeviceLoginStateStore)

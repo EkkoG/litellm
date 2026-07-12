@@ -2,7 +2,6 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-import os
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -26,19 +25,19 @@ from litellm.proxy.credential_endpoints.device_login_flow import (
     DeviceLoginFlow,
     DeviceLoginPending,
     DeviceLoginProvider,
-    InMemoryDeviceLoginStateStore,
+    DeviceLoginStateStore,
 )
 from litellm.proxy.credential_endpoints.device_login_state_store import (
-    _LOCAL_DEVICE_LOGIN_LOCKS,
-    _LOCAL_DEVICE_LOGIN_STATES,
+    DatabaseDeviceLoginStateStore,
+    DatabaseDeviceLoginStateTable,
+    RedisDeviceLoginCache,
     RedisDeviceLoginStateStore,
 )
-from litellm.proxy.utils import handle_exception_on_proxy
+from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router = APIRouter()
-_ALLOW_IN_MEMORY_DEVICE_LOGIN_ENV = "LITELLM_ALLOW_IN_MEMORY_DEVICE_LOGIN"
 
 
 class ChatGPTDeviceLoginStartRequest(BaseModel):
@@ -124,13 +123,16 @@ def _device_login_owner_id(user_api_key_dict: UserAPIKeyAuth) -> str:
     raise HTTPException(status_code=401, detail="Unable to identify device login owner")
 
 
-def _configured_worker_count() -> int:
-    raw_counts = (os.getenv("NUM_WORKERS", "1"), os.getenv("WEB_CONCURRENCY", "1"))
-    return max(int(value) if value.isdigit() else 1 for value in raw_counts)
-
-
-def _allow_in_memory_device_login() -> bool:
-    return os.getenv(_ALLOW_IN_MEMORY_DEVICE_LOGIN_ENV, "").lower() in {"1", "true", "yes"}
+def _build_device_login_state_store(
+    prisma_client: PrismaClient,
+    redis_usage_cache: Optional[RedisDeviceLoginCache],
+) -> DeviceLoginStateStore:
+    if redis_usage_cache is not None:
+        return RedisDeviceLoginStateStore(redis_usage_cache)
+    table = prisma_client.writer_db.litellm_deviceloginstate
+    if not isinstance(table, DatabaseDeviceLoginStateTable):
+        raise TypeError("Prisma client device login state delegate has an invalid type")
+    return DatabaseDeviceLoginStateStore(table)
 
 
 def _build_device_login_flow() -> DeviceLoginFlow:
@@ -138,19 +140,7 @@ def _build_device_login_flow() -> DeviceLoginFlow:
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
-    if redis_usage_cache is None and (_configured_worker_count() > 1 or not _allow_in_memory_device_login()):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Device login requires Redis. Single-process development can explicitly set "
-                f"{_ALLOW_IN_MEMORY_DEVICE_LOGIN_ENV}=true"
-            ),
-        )
-    state_store = (
-        RedisDeviceLoginStateStore(redis_usage_cache)
-        if redis_usage_cache is not None
-        else InMemoryDeviceLoginStateStore(_LOCAL_DEVICE_LOGIN_STATES, _LOCAL_DEVICE_LOGIN_LOCKS)
-    )
+    state_store = _build_device_login_state_store(prisma_client, redis_usage_cache)
     return DeviceLoginFlow(
         providers={
             "chatgpt": ChatGPTDeviceAuthorizationProvider(),
