@@ -200,7 +200,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
       {isAddModalOpen && (
         <AddCredentialsTab
           onAddCredential={handleAddCredential}
-          onChatGPTCredentialCreated={async () => {
+          onCredentialCreated={async () => {
             NotificationsManager.success("Credential added successfully");
             setIsAddModalOpen(false);
             await refetchCredentials();
@@ -215,7 +215,7 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
           open={isUpdateModalOpen}
           existingCredential={selectedCredential}
           onUpdateCredential={handleUpdateCredential}
-          onChatGPTCredentialUpdated={async () => {
+          onCredentialUpdated={async () => {
             NotificationsManager.success("Credential updated successfully");
             setIsUpdateModalOpen(false);
             await refetchCredentials();
