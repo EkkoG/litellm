@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
@@ -23,6 +23,9 @@ const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
   response: {},
   ...overrides,
 });
+
+const renderLogEntry = (overrides: Partial<LogEntry>) =>
+  render(<DataTable data={[logEntry(overrides)]} columns={createColumns()} getRowId={(row) => row.request_id} />);
 
 describe("Cost column", () => {
   it("renders '-' for zero spend with no tooltip, so hovering never shows a contradictory $0", async () => {
@@ -66,5 +69,58 @@ describe("Cost column", () => {
     expect(screen.getByText("$0.060000")).toBeInTheDocument();
     expect(screen.queryByText("$0.010000")).not.toBeInTheDocument();
     expect(screen.getByText("session total")).toBeInTheDocument();
+  });
+});
+
+describe("Prompt Cache column", () => {
+  it("shows the provider prompt cache rate for OpenAI-compatible usage", () => {
+    renderLogEntry({
+      request_id: "req-openai-cache",
+      prompt_tokens: 10000,
+      metadata: {
+        additional_usage_values: {
+          prompt_tokens_details: { cached_tokens: 8000 },
+        },
+      },
+    });
+
+    expect(screen.getByText("Prompt Cache")).toBeInTheDocument();
+    expect(screen.getByText("80.0%")).toBeInTheDocument();
+    expect(screen.getByText("8,000 / 10,000")).toBeInTheDocument();
+  });
+
+  it("shows the provider prompt cache rate for Anthropic usage", () => {
+    renderLogEntry({
+      request_id: "req-anthropic-cache",
+      prompt_tokens: 4000,
+      metadata: {
+        additional_usage_values: {
+          cache_read_input_tokens: 3000,
+          cache_creation_input_tokens: 500,
+        },
+      },
+    });
+
+    expect(screen.getByText("75.0%")).toBeInTheDocument();
+    expect(screen.getByText("3,000 / 4,000")).toBeInTheDocument();
+  });
+
+  it("shows '-' when the provider cache token count is null", () => {
+    renderLogEntry({
+      request_id: "req-null-cache",
+      prompt_tokens: 4000,
+      metadata: {
+        additional_usage_values: {
+          prompt_tokens_details: { cached_tokens: null },
+        },
+      },
+    });
+
+    const promptCacheColumnIndex = screen.getByRole("columnheader", { name: "Prompt Cache" }).cellIndex;
+    const row = screen.getByText("req-null-cache").closest("tr");
+
+    expect(row).not.toBeNull();
+    expect(within(row!).getAllByRole("cell")[promptCacheColumnIndex]).toHaveTextContent("-");
+    expect(screen.queryByText("0.0%")).not.toBeInTheDocument();
   });
 });
