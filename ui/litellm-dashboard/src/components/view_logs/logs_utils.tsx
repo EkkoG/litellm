@@ -1,5 +1,20 @@
 import moment from "moment";
 
+const getRecord = (value: unknown): Record<string, unknown> | undefined =>
+  typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
+
+const getTokenCount = (value: unknown): number | undefined =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+
+export const getPromptCacheReadTokens = (metadata: Record<string, unknown> | undefined): number | undefined => {
+  const usage = getRecord(metadata?.additional_usage_values);
+  const cacheReadTokens = getTokenCount(usage?.cache_read_input_tokens);
+  if (cacheReadTokens !== undefined) return cacheReadTokens;
+
+  const promptTokenDetails = getRecord(usage?.prompt_tokens_details);
+  return getTokenCount(promptTokenDetails?.cached_tokens);
+};
+
 // Add this function to format the time range display
 export const getTimeRangeDisplay = (isCustomDate: boolean, startTime: string, endTime: string) => {
   if (isCustomDate) {
