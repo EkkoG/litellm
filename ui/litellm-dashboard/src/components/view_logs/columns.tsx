@@ -1,11 +1,12 @@
 import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/table_cells";
 import { getSpendString } from "@/utils/dataUtils";
-import type { ColumnDef } from "@tanstack/react-table";
+import type { CellContext, ColumnDef } from "@tanstack/react-table";
 import { Tooltip } from "antd";
 import React from "react";
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import { TableHeaderSortDropdown } from "../common_components/TableHeaderSortDropdown/TableHeaderSortDropdown";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
+import { getPromptCacheReadTokens } from "./logs_utils";
 import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 /** API sort field mapping for /spend/logs/ui endpoint */
@@ -370,6 +371,27 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
             ({String(row.prompt_tokens || "0")}+{String(row.completion_tokens || "0")})
           </span>
         </span>
+      );
+    },
+  },
+  {
+    header: "Prompt Cache",
+    id: "prompt_cache",
+    size: 150,
+    meta: { numeric: true },
+    cell: (info: CellContext<LogEntry, unknown>) => {
+      const row = info.row.original;
+      const cacheReadTokens = getPromptCacheReadTokens(row.metadata);
+      if (cacheReadTokens === undefined || row.prompt_tokens <= 0) return <span>-</span>;
+
+      const hitRate = (cacheReadTokens / row.prompt_tokens) * 100;
+      return (
+        <div className="flex flex-col items-end">
+          <span>{hitRate.toFixed(1)}%</span>
+          <span className="text-[10px] text-gray-400">
+            {cacheReadTokens.toLocaleString()} / {row.prompt_tokens.toLocaleString()}
+          </span>
+        </div>
       );
     },
   },
