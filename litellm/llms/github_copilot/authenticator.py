@@ -152,7 +152,7 @@ class Authenticator:
         """
         headers = {
             "accept": "application/json",
-            "editor-version": "vscode/1.85.1",
+            "editor-version": "vscode/1.128.0",
             "editor-plugin-version": "copilot/1.155.0",
             "user-agent": "GithubCopilot/1.155.0",
             "accept-encoding": "gzip,deflate,br",

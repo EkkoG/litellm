@@ -94,7 +94,7 @@ class TestGithubCopilotResponsesAPITransformation:
         assert headers["Authorization"] == "Bearer test-api-key-123"
         assert headers["content-type"] == "application/json"
         assert headers["copilot-integration-id"] == "vscode-chat"
-        assert headers["editor-version"] == "vscode/1.95.0"
+        assert headers["editor-version"] == "vscode/1.128.0"
         assert headers["editor-plugin-version"] == "copilot-chat/0.26.7"
         assert headers["user-agent"] == "GitHubCopilotChat/0.26.7"
         assert headers["openai-intent"] == "conversation-panel"
