@@ -87,6 +87,27 @@ class TestChatGPTResponsesAPITransformation:
         assert headers["accept"] == "text/event-stream"
         assert headers["session_id"] == "session-123"
 
+    @pytest.mark.parametrize("header_name", ["session-id", "session_id"])
+    @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
+    def test_validate_environment_uses_codex_session_header(self, mock_authenticator_class, header_name):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_access_token.return_value = "access-123"
+        mock_auth_instance.get_account_id.return_value = "acct-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        config = ChatGPTResponsesAPIConfig()
+        session_id = "019f56e3-35d1-7bd2-8e50-f54bbeceeae5"
+        headers = config.validate_environment(
+            headers={},
+            model="gpt-5.6",
+            litellm_params=GenericLiteLLMParams(
+                litellm_call_id="per-call-id",
+                proxy_server_request={"headers": {header_name: session_id}},
+            ),
+        )
+
+        assert headers["session_id"] == session_id
+
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -143,6 +164,20 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert request["input"] == input_list
+
+    def test_chatgpt_preserves_prompt_cache_key(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6",
+            input=[{"role": "user", "content": "hello"}],
+            response_api_optional_request_params={
+                "prompt_cache_key": "stable-thread-id",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["prompt_cache_key"] == "stable-thread-id"
 
     def test_chatgpt_moves_system_input_messages_to_instructions(self):
         config = ChatGPTResponsesAPIConfig()
