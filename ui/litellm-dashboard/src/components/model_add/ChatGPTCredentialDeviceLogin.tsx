@@ -68,6 +68,8 @@ export default function ChatGPTCredentialDeviceLogin({
         }
       } catch (error) {
         setError(deriveErrorMessage(error));
+        setDeviceLogin(null);
+        setStatus("idle");
       } finally {
         setIsPolling(false);
       }

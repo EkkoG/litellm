@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
@@ -87,7 +88,7 @@ const mockChatGPTCredential: CredentialItem = {
     chatgpt_refresh_token: "****wxyz",
   },
   credential_info: {
-    custom_llm_provider: Providers.ChatGPT,
+    custom_llm_provider: "chatgpt",
   },
 };
 
@@ -95,6 +96,12 @@ const mockGitHubCopilotCredential: CredentialItem = {
   credential_name: "copilot-admin",
   credential_values: { api_key: "****abcd" },
   credential_info: { custom_llm_provider: "github_copilot" },
+};
+
+const mockGoogleCredential: CredentialItem = {
+  credential_name: "gemini-admin",
+  credential_values: { api_key: "test-api-key" },
+  credential_info: { custom_llm_provider: "gemini" },
 };
 
 describe("EditCredentialModal", () => {
@@ -163,6 +170,7 @@ describe("EditCredentialModal", () => {
 
     expect(screen.getByRole("button", { name: "Sign in with ChatGPT" })).toBeInTheDocument();
     expect(screen.queryByDisplayValue("****abcd")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update Credential" })).not.toBeInTheDocument();
   });
 
   it("should render GitHub Copilot reconnect instead of masked token fields", async () => {
@@ -182,5 +190,31 @@ describe("EditCredentialModal", () => {
 
     expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
     expect(screen.queryByDisplayValue("****abcd")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Update Credential" })).not.toBeInTheDocument();
+  });
+
+  it("preserves the backend provider id when updating a standard credential", async () => {
+    const queryClient = createQueryClient();
+    const onUpdateCredential = vi.fn();
+    const user = userEvent.setup({ delay: null });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <EditCredentialModal
+          open={true}
+          onCancel={vi.fn()}
+          onUpdateCredential={onUpdateCredential}
+          uploadProps={mockUploadProps}
+          existingCredential={mockGoogleCredential}
+        />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => expect(screen.getByRole("button", { name: "Update Credential" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "Update Credential" }));
+
+    await waitFor(() => {
+      expect(onUpdateCredential).toHaveBeenCalledWith(expect.objectContaining({ custom_llm_provider: "gemini" }));
+    });
   });
 });
