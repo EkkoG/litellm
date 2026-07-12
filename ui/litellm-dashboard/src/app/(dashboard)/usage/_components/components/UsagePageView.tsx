@@ -52,7 +52,8 @@ import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
-import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
+import { formatPromptCacheHitRate, valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
+import { DailySpendTable } from "./DailySpendTable";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
@@ -246,6 +247,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // Derived states from userSpendData
   const totalSpend = userSpendData.metadata?.total_spend || 0;
+  const totalPromptTokens = userSpendData.metadata?.total_prompt_tokens || 0;
+  const totalCacheReadTokens = userSpendData.metadata?.total_cache_read_input_tokens || 0;
+  const promptCacheHitRate = formatPromptCacheHitRate(totalPromptTokens, totalCacheReadTokens);
 
   // Calculate top models from the breakdown data
   const topModels = useMemo(() => {
@@ -604,7 +608,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Col numColSpan={2}>
                         <Card>
                           <Title>Usage Metrics</Title>
-                          <Grid numItems={5} className="gap-4 mt-4">
+                          <Grid numItems={6} className="gap-4 mt-4">
                             <Card>
                               <Title>Total Requests</Title>
                               <Text className="text-2xl font-bold mt-2">
@@ -654,6 +658,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 {userSpendData.metadata?.total_tokens?.toLocaleString() || 0}
                               </Text>
                             </Card>
+                            <Card aria-label="Prompt Cache Hit Rate">
+                              <Title>Prompt Cache Hit Rate</Title>
+                              <Text className="text-2xl font-bold mt-2 text-green-600">{promptCacheHitRate}</Text>
+                              <Text className="text-xs text-gray-500 mt-1">
+                                {totalCacheReadTokens.toLocaleString()} cached tokens
+                              </Text>
+                            </Card>
                           </Grid>
                           {showTokenBreakdown && (
                             <Grid numItems={4} className="gap-4 mt-4">
@@ -696,31 +707,34 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                             {loading ? (
                               <ChartLoader isDateChanging={isDateChanging} />
                             ) : (
-                              <BarChart
-                                data={sortedDailyResults}
-                                index="date"
-                                categories={["metrics.spend"]}
-                                colors={["cyan"]}
-                                valueFormatter={valueFormatterSpend}
-                                yAxisWidth={100}
-                                showLegend={false}
-                                customTooltip={({ payload, active }) => {
-                                  if (!active || !payload?.[0]) return null;
-                                  const data = payload[0].payload;
-                                  return (
-                                    <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                      <p className="font-bold">{data.date}</p>
-                                      <p className="text-cyan-500">
-                                        Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                                      </p>
-                                      <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                      <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                      <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                      <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                                    </div>
-                                  );
-                                }}
-                              />
+                              <>
+                                <BarChart
+                                  data={sortedDailyResults}
+                                  index="date"
+                                  categories={["metrics.spend"]}
+                                  colors={["cyan"]}
+                                  valueFormatter={valueFormatterSpend}
+                                  yAxisWidth={100}
+                                  showLegend={false}
+                                  customTooltip={({ payload, active }) => {
+                                    if (!active || !payload?.[0]) return null;
+                                    const data = payload[0].payload;
+                                    return (
+                                      <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                        <p className="font-bold">{data.date}</p>
+                                        <p className="text-cyan-500">
+                                          Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                        </p>
+                                        <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
+                                        <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
+                                        <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
+                                        <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
+                                      </div>
+                                    );
+                                  }}
+                                />
+                                <DailySpendTable data={sortedDailyResults} />
+                              </>
                             )}
                           </CardContent>
                         </ShadcnCard>

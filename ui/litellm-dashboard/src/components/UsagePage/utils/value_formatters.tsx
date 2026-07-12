@@ -24,3 +24,8 @@ export function valueFormatterSpend(number: number) {
   }
   return "$" + number;
 }
+
+export function formatPromptCacheHitRate(promptTokens: number, cacheReadTokens: number) {
+  if (promptTokens <= 0) return "-";
+  return `${((cacheReadTokens / promptTokens) * 100).toFixed(1)}%`;
+}

@@ -3,7 +3,7 @@ import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
@@ -596,6 +596,41 @@ describe("UsagePage", () => {
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
   });
 
+  it("should display the provider prompt cache hit rate for the selected time range", async () => {
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: {
+        ...mockSpendData.metadata,
+        total_prompt_tokens: 100000,
+        total_cache_read_input_tokens: 60000,
+      },
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    expect(await screen.findByText("Prompt Cache Hit Rate")).toBeInTheDocument();
+    expect(screen.getByText("60.0%")).toBeInTheDocument();
+    expect(screen.getByText("60,000 cached tokens")).toBeInTheDocument();
+  });
+
+  it("should display no prompt cache hit rate when the selected time range has no prompt tokens", async () => {
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      metadata: {
+        ...mockSpendData.metadata,
+        total_prompt_tokens: 0,
+        total_cache_read_input_tokens: 0,
+      },
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    const cacheHitRateCard = await screen.findByLabelText("Prompt Cache Hit Rate");
+    expect(within(cacheHitRateCard).getByText("-")).toBeInTheDocument();
+    expect(within(cacheHitRateCard).getByText("0 cached tokens")).toBeInTheDocument();
+    expect(within(cacheHitRateCard).queryByText(/(?:NaN|Infinity)%/)).not.toBeInTheDocument();
+  });
+
   it("should render the daily spend and top models charts with cyan bars", async () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
 
@@ -614,6 +649,51 @@ describe("UsagePage", () => {
 
     expect(screen.getAllByText("2025-01-01").length).toBeGreaterThan(0);
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
+  });
+
+  it("should display provider prompt caching metrics for each day in Daily Spend", async () => {
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          metrics: {
+            ...mockSpendData.results[0].metrics,
+            prompt_tokens: 50000,
+            cache_read_input_tokens: 12500,
+          },
+        },
+      ],
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    const dailySpendTable = await screen.findByRole("table", { name: "Daily Spend" });
+    expect(within(dailySpendTable).getByText("2025-01-01")).toBeInTheDocument();
+    expect(within(dailySpendTable).getByText("25.0%")).toBeInTheDocument();
+    expect(within(dailySpendTable).getByText("12,500")).toBeInTheDocument();
+  });
+
+  it("should display no daily prompt cache hit rate when a day has no prompt tokens", async () => {
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      results: [
+        {
+          ...mockSpendData.results[0],
+          metrics: {
+            ...mockSpendData.results[0].metrics,
+            prompt_tokens: 0,
+            cache_read_input_tokens: 0,
+          },
+        },
+      ],
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    const dailySpendTable = await screen.findByRole("table", { name: "Daily Spend" });
+    expect(within(dailySpendTable).getByText("-")).toBeInTheDocument();
+    expect(within(dailySpendTable).queryByText(/(?:NaN|Infinity)%/)).not.toBeInTheDocument();
   });
 
   it("should switch between usage views correctly", async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { valueFormatter, valueFormatterSpend } from "./value_formatters";
+import { formatPromptCacheHitRate, valueFormatter, valueFormatterSpend } from "./value_formatters";
 
 describe("valueFormatter", () => {
   it("should format numbers >= 1,000,000 as millions with 2 decimal places", () => {
@@ -60,5 +60,15 @@ describe("valueFormatterSpend", () => {
 
   it("should treat exactly 1,000 as the thousands boundary", () => {
     expect(valueFormatterSpend(1_000)).toBe("$1k");
+  });
+});
+
+describe("formatPromptCacheHitRate", () => {
+  it("should format cache read tokens as a percentage of prompt tokens", () => {
+    expect(formatPromptCacheHitRate(100000, 60000)).toBe("60.0%");
+  });
+
+  it("should return '-' when prompt tokens are zero", () => {
+    expect(formatPromptCacheHitRate(0, 0)).toBe("-");
   });
 });
