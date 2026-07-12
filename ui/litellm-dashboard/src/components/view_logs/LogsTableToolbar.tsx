@@ -1,6 +1,6 @@
 import moment from "moment";
 import { useEffect, useRef, useState } from "react";
-import { SyncOutlined } from "@ant-design/icons";
+import { DownloadOutlined, SyncOutlined } from "@ant-design/icons";
 import { Button, Switch } from "antd";
 import { QUICK_SELECT_OPTIONS } from "./constants";
 import { getTimeRangeDisplay } from "./logs_utils";
@@ -25,6 +25,9 @@ interface LogsTableToolbarProps {
   isLoading: boolean;
   isButtonLoading: boolean;
   onRefetch: () => void;
+  onExport: () => void;
+  isExporting: boolean;
+  exportDisabled: boolean;
   filteredLogs: PaginatedResponse;
 }
 
@@ -47,6 +50,9 @@ export function LogsTableToolbar({
   isLoading,
   isButtonLoading,
   onRefetch,
+  onExport,
+  isExporting,
+  exportDisabled,
   filteredLogs,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
@@ -160,6 +166,18 @@ export function LogsTableToolbar({
                 title="Fetch data"
               >
                 {isButtonLoading ? "Fetching" : "Fetch"}
+              </Button>
+
+              <Button
+                type="default"
+                icon={<DownloadOutlined />}
+                onClick={onExport}
+                loading={isExporting}
+                disabled={isExporting || exportDisabled}
+                title="Export the current page with request and response JSON"
+                aria-label="Export JSON"
+              >
+                {isExporting ? "Exporting" : "Export JSON"}
               </Button>
             </div>
 
