@@ -38,6 +38,7 @@ def test_exchanges_github_access_token_without_filesystem(monkeypatch):
     assert authenticator.get_api_base("github-access-token") == "https://api.githubcopilot.com"
     client.get.assert_called_once()
     assert client.get.call_args.kwargs["headers"]["authorization"] == "token github-access-token"
+    assert client.get.call_args.kwargs["headers"]["editor-version"] == "vscode/1.128.0"
 
 
 def test_reuses_unexpired_copilot_token(monkeypatch):
