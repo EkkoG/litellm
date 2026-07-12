@@ -9,6 +9,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 import litellm
+from litellm._version import version as litellm_version
 from litellm.integrations.code_interpreter_interception.handler import (
     CodeInterpreterInterceptionLogger,
     LITELLM_CODE_EXECUTION_TOOL_NAME,
@@ -25,7 +26,7 @@ from litellm.llms.custom_httpx.llm_http_handler import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import TranscriptionResponse
+from litellm.types.utils import LlmProviders, TranscriptionResponse
 
 _ACTIVE_KEY = "_code_interpreter_interception_active"
 _SANDBOX_KEY = "_code_interpreter_interception_sandbox_key"
@@ -99,6 +100,8 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
         "stream": True,
     }
     config.sign_request.return_value = ({}, None)
+    config.custom_llm_provider = LlmProviders.CHATGPT
+    config.get_provider_request_diagnostics.return_value = {"body_hash": "request-hash"}
     client = HTTPHandler(client=httpx.Client())
     client.post = Mock(
         return_value=httpx.Response(
@@ -107,6 +110,13 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
         )
     )
     logging_obj = Mock()
+    logging_obj.model_call_details = {
+        "litellm_params": {
+            "metadata": {
+                "spend_logs_metadata": {"existing": "value"},
+            }
+        }
+    }
 
     handler.response_api_handler(
         model="gpt-5.3-codex",
@@ -121,6 +131,37 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+    assert logging_obj.model_call_details["litellm_params"]["metadata"]["spend_logs_metadata"] == {
+        "existing": "value",
+        "provider_request": {
+            "schema_version": 1,
+            "provider": "chatgpt",
+            "runtime": {
+                "build_sha": None,
+                "hostname": os.getenv("HOSTNAME"),
+                "pod_name": os.getenv("POD_NAME"),
+                "litellm_version": litellm_version,
+            },
+            "request": {"body_hash": "request-hash"},
+        },
+    }
+
+
+def test_provider_request_diagnostics_are_fail_open():
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.get_provider_request_diagnostics.side_effect = RuntimeError("diagnostics failed")
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"litellm_params": {"metadata": {"existing": "value"}}}
+
+    handler._record_provider_request_diagnostics(
+        responses_api_provider_config=config,
+        headers={},
+        request_data={"model": "gpt-5.3-codex"},
+        logging_obj=logging_obj,
+    )
+
+    assert logging_obj.model_call_details == {"litellm_params": {"metadata": {"existing": "value"}}}
 
 
 def test_response_api_handler_runs_agentic_hooks_in_sync_path(monkeypatch):
@@ -242,6 +283,8 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
         "stream": True,
     }
     config.sign_request.return_value = ({}, None)
+    config.custom_llm_provider = LlmProviders.CHATGPT
+    config.get_provider_request_diagnostics.return_value = {"body_hash": "async-request-hash"}
     client = AsyncHTTPHandler()
     client.post = AsyncMock(
         return_value=httpx.Response(
@@ -250,6 +293,7 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
         )
     )
     logging_obj = Mock()
+    logging_obj.model_call_details = {"litellm_params": {"metadata": {}}}
 
     await handler.async_response_api_handler(
         model="gpt-5.3-codex",
@@ -264,6 +308,11 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
 
     assert client.post.call_args.kwargs["stream"] is True
     assert client.post.call_args.kwargs["json"]["stream"] is True
+    provider_request = logging_obj.model_call_details["litellm_params"]["metadata"]["spend_logs_metadata"][
+        "provider_request"
+    ]
+    assert provider_request["provider"] == "chatgpt"
+    assert provider_request["request"] == {"body_hash": "async-request-hash"}
 
 
 def test_get_agentic_loop_settings_defaults_and_overrides():

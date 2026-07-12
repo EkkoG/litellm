@@ -1,7 +1,10 @@
 import asyncio
 import json
+import os
 import ssl
+from collections.abc import Mapping
 from functools import lru_cache
+from types import TracebackType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -27,6 +30,7 @@ import litellm.litellm_core_utils
 import litellm.types
 import litellm.types.utils
 from litellm._logging import _redact_string, verbose_logger
+from litellm._version import version as litellm_version
 from litellm.anthropic_beta_headers_manager import update_headers_with_filtered_beta
 from litellm.constants import REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES
 from litellm.litellm_core_utils.asyncify import run_async_function
@@ -61,7 +65,14 @@ from litellm.llms.base_llm.image_generation.transformation import (
 from litellm.llms.base_llm.ocr.transformation import BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
-from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+from litellm.llms.base_llm.responses.transformation import (
+    BaseResponsesAPIConfig,
+    ProviderRequestDiagnostics,
+    ProviderRequestLiteLLMParams,
+    ProviderRequestMetadata,
+    ProviderRequestRuntimeDiagnostics,
+    ProviderRequestSpendLogsMetadata,
+)
 from litellm.llms.base_llm.search.transformation import BaseSearchConfig, SearchResponse
 from litellm.llms.base_llm.skills.transformation import BaseSkillsAPIConfig
 from litellm.llms.base_llm.text_to_speech.transformation import BaseTextToSpeechConfig
@@ -231,7 +242,76 @@ def _has_pre_call_deployment_hook(logging_obj: Any) -> bool:
     return False
 
 
+class _ProviderRequestDiagnosticsGuard:
+    def __enter__(self) -> None:
+        return None
+
+    def __exit__(
+        self,
+        _exc_type: type[BaseException] | None,
+        exc_value: BaseException | None,
+        _traceback: TracebackType | None,
+    ) -> bool:
+        if not isinstance(exc_value, Exception):
+            return False
+        verbose_logger.exception("Failed to record provider request diagnostics")
+        return True
+
+
 class BaseLLMHTTPHandler:
+    @staticmethod
+    def _record_provider_request_diagnostics(
+        responses_api_provider_config: BaseResponsesAPIConfig,
+        headers: Mapping[object, object],
+        request_data: Mapping[object, object],
+        logging_obj: LiteLLMLoggingObj,
+    ) -> None:
+        with _ProviderRequestDiagnosticsGuard():
+            request_diagnostics = responses_api_provider_config.get_provider_request_diagnostics(
+                headers=headers,
+                request_data=request_data,
+            )
+            if not isinstance(request_diagnostics, Mapping) or not request_diagnostics:
+                return
+
+            model_call_details = logging_obj.model_call_details
+            litellm_params = model_call_details.get("litellm_params")
+            if not isinstance(litellm_params, dict):
+                return
+
+            metadata = litellm_params.get("metadata")
+            metadata_dict = metadata if isinstance(metadata, dict) else ProviderRequestMetadata()
+            spend_logs_metadata = metadata_dict.get("spend_logs_metadata")
+            spend_logs_metadata_dict = (
+                spend_logs_metadata if isinstance(spend_logs_metadata, dict) else ProviderRequestSpendLogsMetadata()
+            )
+            provider_request = ProviderRequestDiagnostics(
+                schema_version=1,
+                provider=responses_api_provider_config.custom_llm_provider.value,
+                runtime=ProviderRequestRuntimeDiagnostics(
+                    build_sha=next(
+                        (
+                            value
+                            for key in ("LITELLM_BUILD_SHA", "GIT_COMMIT_SHA", "COMMIT_SHA", "GITHUB_SHA")
+                            for value in (os.getenv(key),)
+                            if value
+                        ),
+                        None,
+                    ),
+                    hostname=os.getenv("HOSTNAME"),
+                    pod_name=os.getenv("POD_NAME"),
+                    litellm_version=litellm_version,
+                ),
+                request=request_diagnostics,
+            )
+            updated_spend_logs_metadata = spend_logs_metadata_dict | ProviderRequestSpendLogsMetadata(
+                provider_request=provider_request
+            )
+            updated_metadata = metadata_dict | ProviderRequestMetadata(spend_logs_metadata=updated_spend_logs_metadata)
+            model_call_details["litellm_params"] = litellm_params | ProviderRequestLiteLLMParams(
+                metadata=updated_metadata
+            )
+
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -2436,6 +2516,12 @@ class BaseLLMHTTPHandler:
             stream=stream,
             fake_stream=fake_stream,
         )
+        self._record_provider_request_diagnostics(
+            responses_api_provider_config=responses_api_provider_config,
+            headers=headers,
+            request_data=data,
+            logging_obj=logging_obj,
+        )
         body_kwargs: Dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
         ## LOGGING
@@ -2609,6 +2695,12 @@ class BaseLLMHTTPHandler:
             model=model,
             stream=stream,
             fake_stream=fake_stream,
+        )
+        self._record_provider_request_diagnostics(
+            responses_api_provider_config=responses_api_provider_config,
+            headers=headers,
+            request_data=data,
+            logging_obj=logging_obj,
         )
         body_kwargs: Dict[str, Any] = {"data": signed_body} if signed_body is not None else {"json": data}
 
