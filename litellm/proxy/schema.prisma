@@ -49,8 +49,6 @@ model LiteLLM_DeviceLoginState {
   login_id        String   @id
   encrypted_state String
   expires_at      DateTime
-  claim_token     String?
-  claimed_until   DateTime?
   created_at      DateTime @default(now()) @map("created_at")
   updated_at      DateTime @default(now()) @updatedAt @map("updated_at")
 
