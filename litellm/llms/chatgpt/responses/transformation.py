@@ -1,4 +1,9 @@
+import hashlib
+import json
+from collections.abc import Iterator, Mapping, Sequence
 from typing import Any, Optional, cast
+
+from typing_extensions import TypedDict
 
 from litellm._logging import verbose_logger
 from litellm.exceptions import AuthenticationError
@@ -31,7 +36,29 @@ from ..common_utils import (
 )
 
 
+class ChatGPTProviderRequestDiagnostics(TypedDict):
+    body_keys: tuple[str, ...]
+    header_keys: tuple[str, ...]
+    body_hash: str | None
+    model_hash: str | None
+    prompt_cache_key_hash: str | None
+    previous_response_id_hash: str | None
+    session_id_hash: str | None
+    thread_id_hash: str | None
+    account_id_hash: str | None
+    input_count: int
+    input_prefix_hashes: tuple[tuple[int, str], ...]
+    instructions_hash: str | None
+    tools_hash: str | None
+    tool_choice_hash: str | None
+    reasoning_hash: str | None
+    truncation_hash: str | None
+    include_hash: str | None
+
+
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
+    _INPUT_PREFIX_HASH_WINDOW = 16
+
     def __init__(self) -> None:
         super().__init__()
         self.authenticator = Authenticator()
@@ -107,6 +134,85 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
+
+    def get_provider_request_diagnostics(
+        self,
+        headers: Mapping[object, object],
+        request_data: Mapping[object, object],
+    ) -> ChatGPTProviderRequestDiagnostics:
+        input_items = request_data.get("input")
+        input_sequence = tuple(input_items) if isinstance(input_items, list) else ()
+        return ChatGPTProviderRequestDiagnostics(
+            body_keys=tuple(sorted(str(key) for key in request_data)),
+            header_keys=tuple(sorted(str(key).lower() for key in headers)),
+            body_hash=self._hash_value(request_data),
+            model_hash=self._hash_value(request_data.get("model")),
+            prompt_cache_key_hash=self._hash_value(request_data.get("prompt_cache_key")),
+            previous_response_id_hash=self._hash_value(request_data.get("previous_response_id")),
+            session_id_hash=self._hash_value(self._get_header(headers, "session_id", "session-id")),
+            thread_id_hash=self._hash_value(self._get_header(headers, "thread_id", "thread-id")),
+            account_id_hash=self._hash_value(self._get_header(headers, "chatgpt-account-id")),
+            input_count=len(input_sequence),
+            input_prefix_hashes=self._get_input_prefix_hashes(input_sequence),
+            instructions_hash=self._hash_value(request_data.get("instructions")),
+            tools_hash=self._hash_value(request_data.get("tools")),
+            tool_choice_hash=self._hash_value(request_data.get("tool_choice")),
+            reasoning_hash=self._hash_value(request_data.get("reasoning")),
+            truncation_hash=self._hash_value(request_data.get("truncation")),
+            include_hash=self._hash_value(request_data.get("include")),
+        )
+
+    def _get_header(self, headers: Mapping[object, object], *names: str) -> object | None:
+        normalized_names = frozenset(name.lower() for name in names)
+        return next(
+            (value for key, value in headers.items() if isinstance(key, str) and key.lower() in normalized_names),
+            None,
+        )
+
+    def _hash_value(self, value: object) -> str | None:
+        if value is None:
+            return None
+        serialized = json.dumps(
+            self._normalize_hash_value(value),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def _normalize_hash_value(self, value: object) -> object:
+        if isinstance(value, Mapping):
+            return (
+                "mapping",
+                tuple(
+                    (str(key), self._normalize_hash_value(item))
+                    for key, item in sorted(value.items(), key=lambda entry: str(entry[0]))
+                ),
+            )
+        if isinstance(value, (list, tuple)):
+            return ("sequence", tuple(self._normalize_hash_value(item) for item in value))
+        return value
+
+    def _get_input_prefix_hashes(self, input_items: Sequence[object]) -> tuple[tuple[int, str], ...]:
+        if not input_items:
+            return ((0, hashlib.sha256().hexdigest()),)
+        first_recorded_count = max(1, len(input_items) - self._INPUT_PREFIX_HASH_WINDOW + 1)
+        return tuple(
+            (count, current_digest)
+            for count, current_digest in self._iter_input_prefix_hashes(input_items)
+            if count >= first_recorded_count
+        )
+
+    def _iter_input_prefix_hashes(self, input_items: Sequence[object]) -> Iterator[tuple[int, str]]:
+        digest = hashlib.sha256()
+        for count, item in enumerate(input_items, start=1):
+            serialized = json.dumps(
+                item, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+            ).encode("utf-8")
+            digest.update(len(serialized).to_bytes(8, "big"))
+            digest.update(serialized)
+            yield count, digest.hexdigest()
 
     def _normalize_input_for_chatgpt(self, input: str | ResponseInputParam) -> ResponseInputParam:
         if isinstance(input, str):

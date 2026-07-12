@@ -1,8 +1,10 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union, cast
 
 import httpx
+from typing_extensions import TypedDict
 
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -24,6 +26,32 @@ if TYPE_CHECKING:
 else:
     LiteLLMLoggingObj = Any
     BaseLLMException = Any
+
+
+class ProviderRequestRuntimeDiagnostics(TypedDict):
+    build_sha: str | None
+    hostname: str | None
+    pod_name: str | None
+    litellm_version: str
+
+
+class ProviderRequestDiagnostics(TypedDict):
+    schema_version: int
+    provider: str
+    runtime: ProviderRequestRuntimeDiagnostics
+    request: Mapping[str, object]
+
+
+class ProviderRequestSpendLogsMetadata(TypedDict, total=False):
+    provider_request: ProviderRequestDiagnostics
+
+
+class ProviderRequestMetadata(TypedDict, total=False):
+    spend_logs_metadata: ProviderRequestSpendLogsMetadata
+
+
+class ProviderRequestLiteLLMParams(TypedDict, total=False):
+    metadata: ProviderRequestMetadata
 
 
 class BaseResponsesAPIConfig(ABC):
@@ -81,6 +109,13 @@ class BaseResponsesAPIConfig(ABC):
         exact bytes.
         """
         return headers, None
+
+    def get_provider_request_diagnostics(
+        self,
+        headers: Mapping[object, object],
+        request_data: Mapping[object, object],
+    ) -> Mapping[str, object] | None:
+        return None
 
     @abstractmethod
     def get_supported_openai_params(self, model: str) -> list:

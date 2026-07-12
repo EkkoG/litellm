@@ -179,6 +179,55 @@ class TestChatGPTResponsesAPITransformation:
 
         assert request["prompt_cache_key"] == "stable-thread-id"
 
+    def test_chatgpt_provider_request_diagnostics_are_safe_and_prefix_comparable(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        config = ChatGPTResponsesAPIConfig()
+        headers = {
+            "Authorization": "Bearer secret-token",
+            "ChatGPT-Account-Id": "account-123",
+            "session_id": "session-123",
+        }
+        first_request = {
+            "model": "gpt-5.6",
+            "input": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "hi"},
+            ],
+            "instructions": "be concise",
+            "tools": [{"type": "function", "name": "search"}],
+            "prompt_cache_key": "cache-123",
+        }
+        second_request = {
+            **first_request,
+            "input": [*first_request["input"], {"role": "user", "content": "continue"}],
+        }
+
+        first = config.get_provider_request_diagnostics(headers=headers, request_data=first_request)
+        second = config.get_provider_request_diagnostics(headers=headers, request_data=second_request)
+
+        assert first["input_count"] == 2
+        assert dict(first["input_prefix_hashes"])[2] == dict(second["input_prefix_hashes"])[2]
+        assert first["thread_id_hash"] is None
+        assert first["body_hash"] != second["body_hash"]
+        serialized = json.dumps(first)
+        for sensitive_value in (
+            "secret-token",
+            "account-123",
+            "session-123",
+            "cache-123",
+            "be concise",
+            "hello",
+        ):
+            assert sensitive_value not in serialized
+
+        long_request = {**first_request, "input": [{"index": index} for index in range(20)]}
+        long_request_metadata = config.get_provider_request_diagnostics(headers=headers, request_data=long_request)
+        assert len(long_request_metadata["input_prefix_hashes"]) == 16
+        prefix_counts = tuple(count for count, _ in long_request_metadata["input_prefix_hashes"])
+        assert 4 not in prefix_counts
+        assert 5 in prefix_counts
+
     def test_chatgpt_moves_system_input_messages_to_instructions(self):
         config = ChatGPTResponsesAPIConfig()
         request = config.transform_responses_api_request(
