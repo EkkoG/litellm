@@ -1,12 +1,13 @@
 import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import NotificationsManager from "../molecules/notifications_manager";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
 import DeletedTeamsPage from "../DeletedTeamsPage/DeletedTeamsPage";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import FilterComponent from "../molecules/filter";
-import { keyInfoV1Call } from "../networking";
+import { keyInfoV1Call, uiSpendLogDetailsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
@@ -17,6 +18,7 @@ import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
 import { AntDLoadingSpinner } from "../ui/AntDLoadingSpinner";
+import { createLogExport, downloadLogExport, parseLogDetailsPayload } from "./log_export";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -48,6 +50,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
 
   const [sortBy, setSortBy] = useState<LogsSortField>("startTime");
   const [sortOrder, setSortOrder] = useState<"asc" | "desc">("desc");
+  const [isExporting, setIsExporting] = useState(false);
 
   const [selectedTimeInterval, setSelectedTimeInterval] = useState<{ value: number; unit: string }>({
     value: 24,
@@ -132,18 +135,21 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     [sortBy, sortOrder, handleSortChange],
   );
 
+  const searchedLogs = useMemo(
+    () =>
+      filteredLogs.data.filter((log) => {
+        const matchesSearch =
+          !searchTerm ||
+          log.request_id.includes(searchTerm) ||
+          log.model.includes(searchTerm) ||
+          (log.user && log.user.includes(searchTerm));
+
+        return matchesSearch;
+      }),
+    [filteredLogs.data, searchTerm],
+  );
+
   const filteredData = useMemo(() => {
-    const searchedLogs = filteredLogs.data.filter((log) => {
-      const matchesSearch =
-        !searchTerm ||
-        log.request_id.includes(searchTerm) ||
-        log.model.includes(searchTerm) ||
-        (log.user && log.user.includes(searchTerm));
-
-      // No need for additional filtering since we're now handling this in the API call
-      return matchesSearch;
-    });
-
     const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>(
       (acc, log) => {
         if (!log.session_id) return acc;
@@ -200,7 +206,36 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
         })
     );
-  }, [filteredLogs.data, searchTerm]);
+  }, [searchedLogs]);
+
+  const handleExport = useCallback(async () => {
+    if (!accessToken || searchedLogs.length === 0) return;
+
+    setIsExporting(true);
+    try {
+      const result = await createLogExport(searchedLogs, async (requestId) => {
+        const details: unknown = await uiSpendLogDetailsCall(
+          accessToken,
+          requestId,
+          moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss"),
+        );
+        return parseLogDetailsPayload(details);
+      });
+
+      if (result.status === "error") {
+        NotificationsManager.fromBackend(`Failed to export request logs: ${result.message}`);
+        return;
+      }
+
+      downloadLogExport(result.file);
+      NotificationsManager.success(`Exported ${searchedLogs.length} request logs with request and response JSON`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Failed to download request logs";
+      NotificationsManager.fromBackend(`Failed to export request logs: ${message}`);
+    } finally {
+      setIsExporting(false);
+    }
+  }, [accessToken, searchedLogs, startTime]);
 
   // Keep the Fetch button busy until the table has actually committed the new
   // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
@@ -282,6 +317,9 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     isLoading={isLogsLoading}
                     isButtonLoading={isButtonLoading}
                     onRefetch={() => logsQuery.refetch()}
+                    onExport={handleExport}
+                    isExporting={isExporting}
+                    exportDisabled={searchedLogs.length === 0 || isLogsLoading}
                     filteredLogs={filteredLogs}
                   />
                   <DataTable

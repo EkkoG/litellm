@@ -4,8 +4,9 @@ import moment from "moment";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SpendLogsTable from "./index";
 import { renderWithProviders } from "../../../tests/test-utils";
-import { uiSpendLogsCall } from "../networking";
+import { uiSpendLogDetailsCall, uiSpendLogsCall } from "../networking";
 import { useLogFilterLogic } from "./log_filter_logic";
+import { downloadLogExport } from "./log_export";
 
 const mockHandleFilterResetFromHook = vi.fn();
 vi.mock("./log_filter_logic", async (importOriginal) => {
@@ -33,6 +34,7 @@ vi.mock("../networking", async (importOriginal) => {
       page_size: 50,
       total_pages: 0,
     }),
+    uiSpendLogDetailsCall: vi.fn(),
     keyListCall: vi.fn().mockResolvedValue({ keys: [] }),
     keyInfoV1Call: vi.fn().mockResolvedValue({ info: {} }),
     allEndUsersCall: vi.fn().mockResolvedValue([]),
@@ -42,6 +44,14 @@ vi.mock("../networking", async (importOriginal) => {
 vi.mock("../key_team_helpers/filter_helpers", () => ({
   fetchAllTeams: vi.fn().mockResolvedValue([]),
 }));
+
+vi.mock("./log_export", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./log_export")>();
+  return {
+    ...actual,
+    downloadLogExport: vi.fn(),
+  };
+});
 
 describe("SpendLogsTable", () => {
   const defaultProps = {
@@ -175,6 +185,58 @@ describe("SpendLogsTable", () => {
 
       expect(screen.getByRole("button", { name: "Last Minute" })).toBeInTheDocument();
       expect(screen.queryByRole("button", { name: /Last 24 Hours/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it("loads request and response details before downloading the current page", async () => {
+    const actual = await vi.importActual<typeof import("./log_filter_logic")>("./log_filter_logic");
+    vi.mocked(useLogFilterLogic).mockImplementation(actual.useLogFilterLogic);
+    vi.mocked(uiSpendLogsCall).mockResolvedValue({
+      data: [
+        {
+          request_id: "request-1",
+          api_key: "hashed-key",
+          team_id: "team-1",
+          model: "gpt-test",
+          model_id: "model-1",
+          call_type: "acompletion",
+          spend: 0.01,
+          total_tokens: 3,
+          prompt_tokens: 2,
+          completion_tokens: 1,
+          startTime: "2026-07-12T00:00:00Z",
+          endTime: "2026-07-12T00:00:01Z",
+          cache_hit: "False",
+          messages: "{}",
+          response: "{}",
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+      total_pages: 1,
+    });
+    vi.mocked(uiSpendLogDetailsCall).mockResolvedValue({
+      messages: '[{"role":"user","content":"hello"}]',
+      proxy_server_request: '{"model":"gpt-test"}',
+      response: '{"output":"hi"}',
+    });
+    const user = userEvent.setup();
+
+    renderWithProviders(<SpendLogsTable {...defaultProps} userRole="Internal User" userID="export-user" />);
+
+    await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 5000 });
+    const exportButton = await screen.findByRole("button", { name: "Export JSON" });
+    await waitFor(() => expect(exportButton).toBeEnabled(), { timeout: 5000 });
+    await user.click(exportButton);
+
+    await waitFor(() => {
+      expect(uiSpendLogDetailsCall).toHaveBeenCalledWith(
+        "test-token",
+        "request-1",
+        expect.stringMatching(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/),
+      );
+      expect(downloadLogExport).toHaveBeenCalledTimes(1);
     });
   });
 });
