@@ -3,8 +3,6 @@ CREATE TABLE "LiteLLM_DeviceLoginState" (
     "login_id" TEXT NOT NULL,
     "encrypted_state" TEXT NOT NULL,
     "expires_at" TIMESTAMP(3) NOT NULL,
-    "claim_token" TEXT,
-    "claimed_until" TIMESTAMP(3),
     "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
