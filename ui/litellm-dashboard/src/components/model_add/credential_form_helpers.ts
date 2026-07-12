@@ -33,14 +33,16 @@ export function normalizeCredentialProvider(provider: string | Providers | undef
  */
 export function resetCredentialFormOnProviderChange(
   form: FormInstance,
-  newProvider: Providers,
+  newProvider: string | Providers,
   setSelectedProvider: (p: Providers) => void,
 ): void {
+  const normalizedProvider = normalizeCredentialProvider(newProvider);
+  if (!normalizedProvider) return;
   const preservedName = form.getFieldValue("credential_name");
   form.resetFields();
   if (preservedName !== undefined) {
     form.setFieldValue("credential_name", preservedName);
   }
-  setSelectedProvider(newProvider);
-  form.setFieldValue("custom_llm_provider", newProvider);
+  setSelectedProvider(normalizedProvider);
+  form.setFieldValue("custom_llm_provider", normalizedProvider);
 }
