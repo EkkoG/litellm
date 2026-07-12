@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import AddCredentialModal from "./AddCredentialModal";
@@ -131,22 +132,24 @@ describe("AddCredentialModal", () => {
     expect(screen.queryByLabelText("OpenAI API Key")).not.toBeInTheDocument();
   });
 
-  it("should render GitHub Copilot device login for the provider dropdown value", async () => {
+  it("should render GitHub Copilot device login when selected from the provider dropdown", async () => {
     const queryClient = createQueryClient();
+    const user = userEvent.setup({ delay: null });
 
     render(
       <QueryClientProvider client={queryClient}>
-        <AddCredentialModal
-          open={true}
-          onCancel={vi.fn()}
-          onAddCredential={vi.fn()}
-          uploadProps={mockUploadProps}
-          initialProvider={"GITHUB_COPILOT" as Providers}
-        />
+        <AddCredentialModal open={true} onCancel={vi.fn()} onAddCredential={vi.fn()} uploadProps={mockUploadProps} />
       </QueryClientProvider>,
     );
 
-    expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add Credential" })).not.toBeInTheDocument();
+    const providerSelect = screen.getByLabelText("Provider:");
+    await user.click(providerSelect);
+    await user.type(providerSelect, "copilot");
+    await user.click(await screen.findByText("Github Copilot"));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Add Credential" })).not.toBeInTheDocument();
+    });
   });
 });
