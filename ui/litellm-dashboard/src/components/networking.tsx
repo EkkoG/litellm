@@ -298,6 +298,48 @@ export interface CredentialsResponse {
   credentials: CredentialItem[];
 }
 
+export interface ChatGPTSubscriptionTier {
+  name: string;
+  utilization: number;
+  resets_at?: string | null;
+}
+
+export interface ChatGPTRateLimitResetCredit {
+  id: string;
+  reset_type: string;
+  status: string;
+  granted_at: string;
+  expires_at?: string | null;
+  title?: string | null;
+  description?: string | null;
+}
+
+export interface ChatGPTRateLimitResetCredits {
+  available_count: number;
+  credits?: ChatGPTRateLimitResetCredit[] | null;
+}
+
+export interface ChatGPTSubscriptionStatus {
+  credential_name: string;
+  success: boolean;
+  credential_status: "valid" | "expired";
+  tiers: ChatGPTSubscriptionTier[];
+  rate_limit_reset_credits?: ChatGPTRateLimitResetCredits | null;
+  plan_label?: string | null;
+  error?: string | null;
+  queried_at: number;
+}
+
+export interface ChatGPTResetCreditConsumeResponse {
+  credential_name: string;
+  success: boolean;
+  credential_status: "valid" | "expired";
+  outcome?: "reset" | "nothing_to_reset" | "no_credit" | "already_redeemed" | null;
+  windows_reset: number;
+  error?: string | null;
+  queried_at: number;
+}
+
 let lastErrorTime = 0;
 
 export const handleError = async (errorData: string | any) => {
@@ -2593,6 +2635,28 @@ export const githubCopilotCredentialDevicePollCall = async (accessToken: string,
   apiClient.post(`/credentials/github_copilot/device/poll`, {
     accessToken,
     body: formValues,
+  });
+
+export const chatgptCredentialSubscriptionStatusCall = async (
+  accessToken: string,
+  credentialName: string,
+): Promise<ChatGPTSubscriptionStatus> =>
+  apiClient.get(`/credentials/${encodeURIComponent(credentialName)}/chatgpt/subscription`, {
+    accessToken,
+  });
+
+export const chatgptCredentialResetCreditConsumeCall = async (
+  accessToken: string,
+  credentialName: string,
+  idempotencyKey: string,
+  creditId?: string | null,
+): Promise<ChatGPTResetCreditConsumeResponse> =>
+  apiClient.post(`/credentials/${encodeURIComponent(credentialName)}/chatgpt/rate-limit-reset-credits/consume`, {
+    accessToken,
+    body: {
+      idempotency_key: idempotencyKey,
+      credit_id: creditId ?? null,
+    },
   });
 
 export const credentialListCall = async (accessToken: string) => {

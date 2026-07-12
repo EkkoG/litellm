@@ -2540,6 +2540,74 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/chatgpt/device/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Poll Chatgpt Device Login */
+        post: operations["poll_chatgpt_device_login_credentials_chatgpt_device_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/chatgpt/device/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Chatgpt Device Login */
+        post: operations["start_chatgpt_device_login_credentials_chatgpt_device_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/github_copilot/device/poll": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Poll Github Copilot Device Login */
+        post: operations["poll_github_copilot_device_login_credentials_github_copilot_device_poll_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/github_copilot/device/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Github Copilot Device Login */
+        post: operations["start_github_copilot_device_login_credentials_github_copilot_device_start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/migrate-encryption": {
         parameters: {
             query?: never;
@@ -2608,6 +2676,40 @@ export interface paths {
          * @description [BETA] endpoint. This might change unexpectedly.
          */
         patch: operations["update_credential_credentials__credential_name__patch"];
+        trace?: never;
+    };
+    "/credentials/{credential_name}/chatgpt/rate-limit-reset-credits/consume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Consume Chatgpt Credential Rate Limit Reset Credit */
+        post: operations["consume_chatgpt_credential_rate_limit_reset_credit_credentials__credential_name__chatgpt_rate_limit_reset_credits_consume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/credentials/{credential_name}/chatgpt/subscription": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Chatgpt Credential Subscription */
+        get: operations["get_chatgpt_credential_subscription_credentials__credential_name__chatgpt_subscription_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/cursor/chat/completions": {
@@ -4146,6 +4248,23 @@ export interface paths {
          *     Returns a structured object with values and descriptions for UI display.
          */
         get: operations["get_internal_user_settings_get_internal_user_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/get/ldap_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Ldap Settings */
+        get: operations["get_ldap_settings_get_ldap_settings_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -14251,6 +14370,23 @@ export interface paths {
         patch: operations["update_internal_user_settings_update_internal_user_settings_patch"];
         trace?: never;
     };
+    "/update/ldap_settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Ldap Settings */
+        patch: operations["update_ldap_settings_update_ldap_settings_patch"];
+        trace?: never;
+    };
     "/update/mcp_semantic_filter_settings": {
         parameters: {
             query?: never;
@@ -22139,6 +22275,107 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** ChatGPTDeviceLoginPollRequest */
+        ChatGPTDeviceLoginPollRequest: {
+            /** Login Id */
+            login_id: string;
+        };
+        /** ChatGPTDeviceLoginStartRequest */
+        ChatGPTDeviceLoginStartRequest: {
+            /** Api Base */
+            api_base?: string | null;
+            /** Credential Name */
+            credential_name: string;
+            /**
+             * Overwrite Existing
+             * @default false
+             */
+            overwrite_existing: boolean;
+        };
+        /** ChatGPTRateLimitResetCredit */
+        ChatGPTRateLimitResetCredit: {
+            /** Description */
+            description?: string | null;
+            /** Expires At */
+            expires_at?: string | null;
+            /** Granted At */
+            granted_at: string;
+            /** Id */
+            id: string;
+            /** Reset Type */
+            reset_type: string;
+            /** Status */
+            status: string;
+            /** Title */
+            title?: string | null;
+        };
+        /** ChatGPTRateLimitResetCredits */
+        ChatGPTRateLimitResetCredits: {
+            /** Available Count */
+            available_count: number;
+            /** Credits */
+            credits?: components["schemas"]["ChatGPTRateLimitResetCredit"][] | null;
+        };
+        /** ChatGPTResetCreditConsumeRequest */
+        ChatGPTResetCreditConsumeRequest: {
+            /** Credit Id */
+            credit_id?: string | null;
+            /** Idempotency Key */
+            idempotency_key: string;
+        };
+        /** ChatGPTResetCreditConsumeResponse */
+        ChatGPTResetCreditConsumeResponse: {
+            /** Credential Name */
+            credential_name: string;
+            /**
+             * Credential Status
+             * @enum {string}
+             */
+            credential_status: "valid" | "expired";
+            /** Error */
+            error?: string | null;
+            /** Outcome */
+            outcome?: ("reset" | "nothing_to_reset" | "no_credit" | "already_redeemed") | null;
+            /** Queried At */
+            queried_at: number;
+            /** Success */
+            success: boolean;
+            /**
+             * Windows Reset
+             * @default 0
+             */
+            windows_reset: number;
+        };
+        /** ChatGPTSubscriptionStatus */
+        ChatGPTSubscriptionStatus: {
+            /** Credential Name */
+            credential_name: string;
+            /**
+             * Credential Status
+             * @enum {string}
+             */
+            credential_status: "valid" | "expired";
+            /** Error */
+            error?: string | null;
+            /** Plan Label */
+            plan_label?: string | null;
+            /** Queried At */
+            queried_at: number;
+            rate_limit_reset_credits?: components["schemas"]["ChatGPTRateLimitResetCredits"] | null;
+            /** Success */
+            success: boolean;
+            /** Tiers */
+            tiers: components["schemas"]["ChatGPTSubscriptionTier"][];
+        };
+        /** ChatGPTSubscriptionTier */
+        ChatGPTSubscriptionTier: {
+            /** Name */
+            name: string;
+            /** Resets At */
+            resets_at?: string | null;
+            /** Utilization */
+            utilization: number;
+        };
         /** ChatMessage */
         ChatMessage: {
             /** Content */
@@ -24643,6 +24880,106 @@ export interface components {
             /** Tpm Limit Type */
             tpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
         };
+        /** LDAPConfig */
+        LDAPConfig: {
+            /**
+             * Ldap Admin Group Dn
+             * @description LDAP group DN whose members should become LiteLLM proxy admins
+             */
+            ldap_admin_group_dn?: string | null;
+            /**
+             * Ldap Allow Insecure
+             * @description Allow LDAP bind without SSL or StartTLS. Not recommended outside isolated development environments
+             * @default false
+             */
+            ldap_allow_insecure: boolean;
+            /**
+             * Ldap Base Dn
+             * @description Base DN used to search for users
+             */
+            ldap_base_dn?: string | null;
+            /**
+             * Ldap Bind Dn
+             * @description Service account DN used to search users
+             */
+            ldap_bind_dn?: string | null;
+            /**
+             * Ldap Bind Password
+             * @description Service account password
+             */
+            ldap_bind_password?: string | null;
+            /**
+             * Ldap Display Name Attribute
+             * @description LDAP attribute used as the LiteLLM user display name
+             * @default displayName
+             */
+            ldap_display_name_attribute: string;
+            /**
+             * Ldap Email Attribute
+             * @description LDAP attribute used as the LiteLLM user email
+             * @default mail
+             */
+            ldap_email_attribute: string;
+            /**
+             * Ldap Enabled
+             * @description Enable LDAP login for the Admin UI
+             * @default false
+             */
+            ldap_enabled: boolean;
+            /**
+             * Ldap Group Attribute
+             * @description LDAP attribute containing user group DNs
+             * @default memberOf
+             */
+            ldap_group_attribute: string;
+            /**
+             * Ldap Search Base
+             * @description Optional search base. Defaults to base DN
+             */
+            ldap_search_base?: string | null;
+            /**
+             * Ldap Start Tls
+             * @description Upgrade LDAP connection with StartTLS before bind
+             * @default false
+             */
+            ldap_start_tls: boolean;
+            /**
+             * Ldap Url
+             * @description LDAP server URL, for example ldap://host:389
+             */
+            ldap_url?: string | null;
+            /**
+             * Ldap Use Ssl
+             * @description Connect to LDAP with SSL
+             * @default false
+             */
+            ldap_use_ssl: boolean;
+            /**
+             * Ldap User Id Attribute
+             * @description Immutable LDAP attribute used as the LiteLLM identity, for example objectGUID or entryUUID
+             */
+            ldap_user_id_attribute?: string | null;
+            /**
+             * Ldap User Search Filter
+             * @description LDAP user search filter. The {username} placeholder is escaped before use
+             * @default (|(uid={username})(sAMAccountName={username})(userPrincipalName={username}))
+             */
+            ldap_user_search_filter: string;
+        };
+        /**
+         * LDAPSettingsResponse
+         * @description Response model for LDAP settings
+         */
+        LDAPSettingsResponse: {
+            /** Field Schema */
+            field_schema: {
+                [key: string]: unknown;
+            };
+            /** Values */
+            values: {
+                [key: string]: unknown;
+            };
+        };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
             /** Jailbreak */
@@ -25627,6 +25964,16 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Chatgpt Access Token */
+            chatgpt_access_token?: string | null;
+            /** Chatgpt Account Id */
+            chatgpt_account_id?: string | null;
+            /** Chatgpt Expires At */
+            chatgpt_expires_at?: string | null;
+            /** Chatgpt Id Token */
+            chatgpt_id_token?: string | null;
+            /** Chatgpt Refresh Token */
+            chatgpt_refresh_token?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -25645,6 +25992,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Github Copilot Access Token */
+            github_copilot_access_token?: string | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -31846,6 +32195,11 @@ export interface components {
              * @default false
              */
             is_control_plane: boolean;
+            /**
+             * Ldap Configured
+             * @default false
+             */
+            ldap_configured: boolean;
             /** Proxy Base Url */
             proxy_base_url: string | null;
             /** Server Root Path */
@@ -33339,7 +33693,7 @@ export interface components {
              */
             max_tokens: number | null;
             /** Mode */
-            mode: ("embedding" | "chat" | "completion") | null;
+            mode: ("embedding" | "chat" | "completion" | "responses") | null;
             /**
              * Output Cost Per Token
              * @default 0
@@ -33451,6 +33805,16 @@ export interface components {
             cache_read_input_token_cost_flex?: number | null;
             /** Cache Read Input Token Cost Priority */
             cache_read_input_token_cost_priority?: number | null;
+            /** Chatgpt Access Token */
+            chatgpt_access_token?: string | null;
+            /** Chatgpt Account Id */
+            chatgpt_account_id?: string | null;
+            /** Chatgpt Expires At */
+            chatgpt_expires_at?: string | null;
+            /** Chatgpt Id Token */
+            chatgpt_id_token?: string | null;
+            /** Chatgpt Refresh Token */
+            chatgpt_refresh_token?: string | null;
             /** Citation Cost Per Token */
             citation_cost_per_token?: number | null;
             /** Complexity Router Config */
@@ -33469,6 +33833,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
+            /** Github Copilot Access Token */
+            github_copilot_access_token?: string | null;
             /** Input Cost Per Audio Per Second */
             input_cost_per_audio_per_second?: number | null;
             /** Input Cost Per Audio Per Second Above 128K Tokens */
@@ -37685,6 +38051,138 @@ export interface operations {
             };
         };
     };
+    poll_chatgpt_device_login_credentials_chatgpt_device_poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTDeviceLoginPollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_chatgpt_device_login_credentials_chatgpt_device_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTDeviceLoginStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_github_copilot_device_login_credentials_github_copilot_device_poll_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTDeviceLoginPollRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_github_copilot_device_login_credentials_github_copilot_device_start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTDeviceLoginStartRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     migrate_encryption_endpoint_credentials_migrate_encryption_post: {
         parameters: {
             query?: {
@@ -37792,6 +38290,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consume_chatgpt_credential_rate_limit_reset_credit_credentials__credential_name__chatgpt_rate_limit_reset_credits_consume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ChatGPT credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatGPTResetCreditConsumeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatGPTResetCreditConsumeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_chatgpt_credential_subscription_credentials__credential_name__chatgpt_subscription_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The ChatGPT credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatGPTSubscriptionStatus"];
                 };
             };
             /** @description Validation Error */
@@ -39950,6 +40516,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InternalUserSettingsResponse"];
+                };
+            };
+        };
+    };
+    get_ldap_settings_get_ldap_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LDAPSettingsResponse"];
                 };
             };
         };
@@ -51104,6 +51690,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["DefaultInternalUserParams"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_ldap_settings_update_ldap_settings_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LDAPConfig"];
             };
         };
         responses: {
