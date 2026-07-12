@@ -2,7 +2,7 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Optional
+from typing import Annotated, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from pydantic import BaseModel
@@ -19,6 +19,17 @@ from litellm.proxy.credential_endpoints.credential_writer import (
     CredentialConflict,
     CredentialNotFound,
     CredentialWriter,
+)
+from litellm.proxy.credential_endpoints.chatgpt_credential_utils import refresh_chatgpt_credential_if_needed
+from litellm.proxy.credential_endpoints.chatgpt_subscription import (
+    ChatGPTResetCreditConsumeRequest,
+    ChatGPTResetCreditConsumeResponse,
+    ChatGPTSubscriptionStatus,
+    consume_chatgpt_rate_limit_reset_credit,
+    get_chatgpt_access_token,
+    get_chatgpt_account_id,
+    is_chatgpt_credential,
+    query_chatgpt_subscription_status,
 )
 from litellm.proxy.credential_endpoints.device_login_flow import (
     DeviceLoginFailed,
@@ -48,6 +59,12 @@ class ChatGPTDeviceLoginStartRequest(BaseModel):
 
 class ChatGPTDeviceLoginPollRequest(BaseModel):
     login_id: str
+
+
+class ChatGPTCredentialAuth(BaseModel):
+    credential_name: str
+    access_token: str
+    account_id: str | None = None
 
 
 @router.post(
@@ -372,6 +389,94 @@ async def get_credential_by_model(
     except Exception as e:
         verbose_proxy_logger.exception(e)
         raise handle_exception_on_proxy(e)
+
+
+@router.get(
+    "/credentials/{credential_name:path}/chatgpt/subscription",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=ChatGPTSubscriptionStatus,
+)
+async def get_chatgpt_credential_subscription(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: Annotated[
+        str,
+        Path(description="The ChatGPT credential name, percent-decoded; may contain slashes"),
+    ],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    try:
+        auth = _get_chatgpt_credential_auth(credential_name, user_api_key_dict)
+        return await query_chatgpt_subscription_status(
+            credential_name=auth.credential_name,
+            access_token=auth.access_token,
+            account_id=auth.account_id,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
+
+
+@router.post(
+    "/credentials/{credential_name:path}/chatgpt/rate-limit-reset-credits/consume",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=ChatGPTResetCreditConsumeResponse,
+)
+async def consume_chatgpt_credential_rate_limit_reset_credit(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: Annotated[
+        str,
+        Path(description="The ChatGPT credential name, percent-decoded; may contain slashes"),
+    ],
+    body: ChatGPTResetCreditConsumeRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    try:
+        auth = _get_chatgpt_credential_auth(credential_name, user_api_key_dict)
+        return await consume_chatgpt_rate_limit_reset_credit(
+            credential_name=auth.credential_name,
+            access_token=auth.access_token,
+            account_id=auth.account_id,
+            idempotency_key=body.idempotency_key,
+            credit_id=body.credit_id,
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
+
+
+def _get_chatgpt_credential_auth(
+    credential_name: str,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> ChatGPTCredentialAuth:
+    credential = next(
+        (credential for credential in litellm.credential_list if credential.credential_name == credential_name),
+        None,
+    )
+    if credential is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Credential not found. Got credential name: " + credential_name,
+        )
+    if not is_chatgpt_credential(credential):
+        raise HTTPException(status_code=400, detail="Credential is not a ChatGPT credential")
+
+    credential_values = refresh_chatgpt_credential_if_needed(
+        credential=credential,
+        user_id=user_api_key_dict.user_id,
+    )
+    access_token = get_chatgpt_access_token(credential_values)
+    if access_token is None:
+        raise HTTPException(status_code=400, detail="ChatGPT credential is missing an access token")
+
+    return ChatGPTCredentialAuth(
+        credential_name=credential.credential_name,
+        access_token=access_token,
+        account_id=get_chatgpt_account_id(credential_values),
+    )
 
 
 @router.delete(

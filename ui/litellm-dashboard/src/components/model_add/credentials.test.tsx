@@ -1,14 +1,28 @@
-import { CredentialItem } from "@/components/networking";
+import type { CredentialItem } from "@/components/networking";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { UploadProps } from "antd/es/upload";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import CredentialsPanel from "./credentials";
 
 const DEFAULT_UPLOAD_PROPS = {} as UploadProps;
 
+const { mockChatGPTResetCreditConsumeCall, mockChatGPTSubscriptionStatusCall } = vi.hoisted(() => ({
+  mockChatGPTResetCreditConsumeCall: vi.fn(),
+  mockChatGPTSubscriptionStatusCall: vi.fn(),
+}));
+
 const mockUseAuthorized = vi.fn();
 const mockUseCredentials = vi.fn();
+
+vi.mock("@/components/networking", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/networking")>();
+  return {
+    ...actual,
+    chatgptCredentialResetCreditConsumeCall: mockChatGPTResetCreditConsumeCall,
+    chatgptCredentialSubscriptionStatusCall: mockChatGPTSubscriptionStatusCall,
+  };
+});
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => mockUseAuthorized(),
@@ -29,6 +43,11 @@ const createQueryClient = () =>
   });
 
 describe("CredentialsPanel", () => {
+  beforeEach(() => {
+    mockChatGPTResetCreditConsumeCall.mockReset();
+    mockChatGPTSubscriptionStatusCall.mockReset();
+  });
+
   it("should render", () => {
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({
@@ -67,6 +86,125 @@ describe("CredentialsPanel", () => {
     );
 
     expect(screen.getByText("openai-key")).toBeInTheDocument();
+    expect(mockChatGPTSubscriptionStatusCall).not.toHaveBeenCalled();
+  });
+
+  it("should display ChatGPT subscription status for ChatGPT credentials", async () => {
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "chatgpt-admin",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "chatgpt" },
+      },
+    ];
+    const subscriptionStatus = {
+      credential_name: "chatgpt-admin",
+      success: true,
+      credential_status: "valid",
+      plan_label: "Plus",
+      tiers: [
+        { name: "five_hour", utilization: 25, resets_at: null },
+        { name: "seven_day", utilization: 10, resets_at: null },
+      ],
+      rate_limit_reset_credits: null,
+      error: null,
+      queried_at: Date.now(),
+    };
+    mockChatGPTSubscriptionStatusCall.mockResolvedValue(subscriptionStatus);
+
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({
+      data: { credentials },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Plus")).toBeInTheDocument();
+    });
+    expect(screen.getByText("5h 25%")).toBeInTheDocument();
+    expect(screen.getByText("7d 10%")).toBeInTheDocument();
+    expect(mockChatGPTSubscriptionStatusCall).toHaveBeenCalledWith("test-token", "chatgpt-admin");
+  });
+
+  it("should display reset credits and consume a selected credit", async () => {
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "chatgpt-admin",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "chatgpt" },
+      },
+    ];
+    const subscriptionStatus = {
+      credential_name: "chatgpt-admin",
+      success: true,
+      credential_status: "valid",
+      plan_label: "Plus",
+      tiers: [],
+      rate_limit_reset_credits: {
+        available_count: 1,
+        credits: [
+          {
+            id: "credit-1",
+            reset_type: "codex_rate_limits",
+            status: "available",
+            granted_at: "2026-07-12T00:00:00Z",
+            title: "Weekly reset",
+            description: "Thanks for using Codex! You've been granted one free rate limit reset.",
+            expires_at: "2099-07-12T00:00:00Z",
+          },
+        ],
+      },
+      error: null,
+      queried_at: Date.now(),
+    };
+    const resetCreditConsumeResponse = {
+      credential_name: "chatgpt-admin",
+      success: true,
+      credential_status: "valid",
+      outcome: "reset",
+      windows_reset: 2,
+      error: null,
+      queried_at: Date.now(),
+    };
+    mockChatGPTSubscriptionStatusCall.mockResolvedValue(subscriptionStatus);
+    mockChatGPTResetCreditConsumeCall.mockResolvedValue(resetCreditConsumeResponse);
+
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
+    mockUseCredentials.mockReturnValue({
+      data: { credentials },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Weekly reset")).toBeInTheDocument();
+    });
+    expect(
+      screen.queryByText("Thanks for using Codex! You've been granted one free rate limit reset."),
+    ).not.toBeInTheDocument();
+    expect(screen.getByText(/^Expires in /)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^use$/i }));
+
+    await waitFor(() => {
+      expect(mockChatGPTResetCreditConsumeCall).toHaveBeenCalledWith(
+        "test-token",
+        "chatgpt-admin",
+        expect.any(String),
+        "credit-1",
+      );
+    });
   });
 
   it("should display empty state when no credentials are provided", () => {

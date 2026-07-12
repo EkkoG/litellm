@@ -22,6 +22,29 @@ const localStorageMock = (() => {
 })();
 Object.defineProperty(window, "localStorage", { value: localStorageMock });
 
+const { COST_MAP_RELOAD_STATUS, COST_MAP_SOURCE_INFO } = vi.hoisted(() => ({
+  COST_MAP_SOURCE_INFO: {
+    source: "local",
+    url: null,
+    is_env_forced: false,
+    fallback_reason: null,
+    model_count: 0,
+  },
+  COST_MAP_RELOAD_STATUS: {
+    scheduled: false,
+    interval_hours: null,
+    last_run: null,
+    next_run: null,
+  },
+}));
+
+const AUTHORIZED_ADMIN = {
+  accessToken: "123",
+  token: "123",
+  userRole: "Admin",
+  userId: "123",
+};
+
 // Minimal stubs to avoid Next.js router and network usage during render
 vi.mock("@/components/networking", () => ({
   credentialListCall: vi.fn().mockResolvedValue({ credentials: [] }),
@@ -29,10 +52,18 @@ vi.mock("@/components/networking", () => ({
   modelCostMap: vi.fn().mockResolvedValue({}),
   getPassThroughEndpointsCall: vi.fn().mockResolvedValue({ endpoints: {} }),
   getCallbacksCall: vi.fn().mockResolvedValue({ router_settings: {} }),
+  chatgptCredentialResetCreditConsumeCall: vi.fn(),
+  chatgptCredentialSubscriptionStatusCall: vi.fn(),
+  getGlobalLitellmHeaderName: vi.fn().mockReturnValue("Authorization"),
+  getModelCostMapSource: vi.fn().mockResolvedValue(COST_MAP_SOURCE_INFO),
+  reloadModelCostMap: vi.fn().mockResolvedValue({ status: "success", models_count: 0 }),
+  scheduleModelCostMapReload: vi.fn().mockResolvedValue({ status: "success" }),
+  cancelModelCostMapReload: vi.fn().mockResolvedValue({ status: "success" }),
   setCallbacksCall: vi.fn().mockResolvedValue(undefined),
   getUiSettings: vi.fn().mockResolvedValue({ values: {} }),
   latestHealthChecksCall: vi.fn().mockResolvedValue({ latest_health_checks: {} }),
-  getModelCostMapReloadStatus: vi.fn().mockResolvedValue({}),
+  getModelCostMapReloadStatus: vi.fn().mockResolvedValue(COST_MAP_RELOAD_STATUS),
+  proxyBaseUrl: "",
 }));
 
 vi.mock("@/app/(dashboard)/models-and-endpoints/components/ModelAnalyticsTab/ModelAnalyticsTab", () => ({
@@ -102,12 +133,7 @@ describe("ModelsAndEndpointsView", () => {
       isLoading: false,
       error: null,
     });
-    mockUseAuthorized.mockReturnValue({
-      accessToken: "123",
-      token: "123",
-      userRole: "Admin",
-      userId: "123",
-    });
+    mockUseAuthorized.mockReturnValue(AUTHORIZED_ADMIN);
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (global as any).ResizeObserver = class {
       observe() {}
@@ -208,5 +234,23 @@ describe("ModelsAndEndpointsView", () => {
     const healthCheckProps = mockHealthCheckComponent.mock.calls[0][0];
     expect(healthCheckProps.all_models_on_proxy).toEqual(["deployment-id-1", "deployment-id-2"]);
     expect(healthCheckProps.all_models_on_proxy).not.toContain("gpt-4");
+  });
+
+  it("should show the credential status column in the LLM Credentials tab", async () => {
+    const queryClient = createQueryClient();
+    const { getAllByRole, getByRole, findByText } = render(
+      <QueryClientProvider client={queryClient}>
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
+      </QueryClientProvider>,
+    );
+
+    const credentialsTab = getByRole("tab", { name: "LLM Credentials" });
+    await act(async () => {
+      credentialsTab.click();
+    });
+
+    expect(await findByText("Configured credentials for different AI providers. Add and manage your API credentials."))
+      .toBeInTheDocument();
+    expect(getAllByRole("columnheader", { name: "Status" }).length).toBeGreaterThan(0);
   });
 });
