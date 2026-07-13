@@ -101,6 +101,7 @@ class TestChatGPTResponsesAPITransformation:
             headers={},
             model="gpt-5.6",
             litellm_params=GenericLiteLLMParams(
+                litellm_trace_id="per-call-trace-id",
                 litellm_call_id="per-call-id",
                 proxy_server_request={"headers": {header_name: session_id}},
             ),
