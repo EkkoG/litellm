@@ -104,6 +104,66 @@ describe("createLogExport", () => {
     });
   });
 
+  it("exports failed logs without a response when failure status is stored in metadata", async () => {
+    const failedLog = {
+      ...createLog("request-1"),
+      metadata: {
+        status: "failure",
+        error_information: { error_message: "Upstream connection failed" },
+      },
+    };
+
+    const result = await createLogExport([failedLog], async () => ({
+      proxy_server_request: '{"model":"gpt-test","messages":[{"role":"user","content":"hello"}]}',
+      response: null,
+    }));
+
+    expect(result.status).toBe("success");
+    if (result.status !== "success") return;
+
+    expect(JSON.parse(result.file.contents).logs[0]).toEqual(
+      expect.objectContaining({
+        metadata: {
+          status: "failure",
+          error_information: { error_message: "Upstream connection failed" },
+        },
+        proxy_server_request: {
+          model: "gpt-test",
+          messages: [{ role: "user", content: "hello" }],
+        },
+        response: null,
+      }),
+    );
+  });
+
+  it("still requires response JSON for logs that did not fail", async () => {
+    const result = await createLogExport([createLog("request-1")], async () => ({
+      proxy_server_request: '{"model":"gpt-test"}',
+      response: null,
+    }));
+
+    expect(result).toEqual({
+      status: "error",
+      message: "Request or response JSON is unavailable for log request-1",
+    });
+  });
+
+  it("still requires request JSON for failed logs", async () => {
+    const failedLog = {
+      ...createLog("request-1"),
+      status: "failure",
+    };
+
+    const result = await createLogExport([failedLog], async () => ({
+      response: null,
+    }));
+
+    expect(result).toEqual({
+      status: "error",
+      message: "Request or response JSON is unavailable for log request-1",
+    });
+  });
+
   it("rejects malformed detail envelopes", () => {
     expect(parseLogDetailsPayload(null)).toBeNull();
     expect(parseLogDetailsPayload([])).toBeNull();
