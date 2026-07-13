@@ -693,7 +693,7 @@
     "provider_display_name": "ChatGPT",
     "litellm_provider": "chatgpt",
     "credential_fields": [],
-    "default_model_placeholder": "chatgpt/gpt-5.5"
+    "default_model_placeholder": "chatgpt/gpt-5.3-codex"
   },
   {
     "provider": "CLARIFAI",

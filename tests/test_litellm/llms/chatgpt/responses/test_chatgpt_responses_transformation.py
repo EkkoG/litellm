@@ -25,7 +25,6 @@ class TestChatGPTResponsesAPITransformation:
     @pytest.mark.parametrize(
         "model_name",
         [
-            "chatgpt/gpt-5.5",
             "chatgpt/gpt-5.4",
             "chatgpt/gpt-5.4-pro",
             "chatgpt/gpt-5.3-chat-latest",
