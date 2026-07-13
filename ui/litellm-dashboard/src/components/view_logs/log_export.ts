@@ -71,6 +71,13 @@ const parseStoredJson = (value: unknown): unknown => {
 const preferPayload = (detailValue: unknown, rowValue: unknown): unknown =>
   hasJsonContent(detailValue) ? detailValue : rowValue;
 
+const isFailedLog = (log: LogExportSource): boolean => {
+  const metadataStatus = isRecord(log.metadata) ? log.metadata.status : undefined;
+  const status = typeof log.status === "string" ? log.status : metadataStatus;
+
+  return typeof status === "string" && status.toLowerCase() === "failure";
+};
+
 export const parseLogDetailsPayload = (value: unknown): LogDetailsPayload | null => {
   if (!isRecord(value)) return null;
 
@@ -105,8 +112,11 @@ export const createLogExport = async (
       const messages = preferPayload(details[index]?.messages, log.messages);
       const proxyServerRequest = preferPayload(details[index]?.proxy_server_request, log.proxy_server_request);
       const response = preferPayload(details[index]?.response, log.response);
+      const hasRequest = hasJsonContent(messages) || hasJsonContent(proxyServerRequest);
+      const hasResponse = hasJsonContent(response);
+      const canOmitResponse = isFailedLog(log);
 
-      if ((!hasJsonContent(messages) && !hasJsonContent(proxyServerRequest)) || !hasJsonContent(response)) {
+      if (!hasRequest || (!hasResponse && !canOmitResponse)) {
         return { status: "error" as const, requestId: log.request_id };
       }
 
@@ -140,7 +150,7 @@ export const createLogExport = async (
           metadata: log.metadata,
           messages: parseStoredJson(messages),
           proxy_server_request: parseStoredJson(proxyServerRequest),
-          response: parseStoredJson(response),
+          response: hasResponse ? parseStoredJson(response) : null,
         },
       };
     });
