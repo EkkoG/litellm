@@ -279,9 +279,6 @@ def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
         value = metadata.get("session_id")
         if value:
             return str(value)
-    litellm_trace_id = params.get("litellm_trace_id")
-    if litellm_trace_id:
-        return str(litellm_trace_id)
     proxy_server_request = params.get("proxy_server_request")
     if isinstance(proxy_server_request, dict):
         headers = proxy_server_request.get("headers")
@@ -289,6 +286,9 @@ def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
             for key, value in headers.items():
                 if isinstance(key, str) and key.lower() in ("session-id", "session_id") and value:
                     return str(value)
+    litellm_trace_id = params.get("litellm_trace_id")
+    if litellm_trace_id:
+        return str(litellm_trace_id)
     litellm_call_id = params.get("litellm_call_id")
     if litellm_call_id:
         return str(litellm_call_id)
