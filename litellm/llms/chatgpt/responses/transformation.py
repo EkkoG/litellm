@@ -33,6 +33,7 @@ from ..common_utils import (
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
+    get_chatgpt_thread_id,
 )
 
 
@@ -85,7 +86,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         account_id = self.authenticator.get_account_id(litellm_params=litellm_params, access_token=access_token)
         session_id = ensure_chatgpt_session_id(litellm_params)
-        default_headers = get_chatgpt_default_headers(access_token, account_id, session_id)
+        thread_id = get_chatgpt_thread_id(litellm_params)
+        default_headers = get_chatgpt_default_headers(access_token, account_id, session_id, thread_id)
         return {**default_headers, **headers}
 
     def transform_responses_api_request(

@@ -229,6 +229,7 @@ def get_chatgpt_default_headers(
     access_token: str,
     account_id: Optional[str],
     session_id: Optional[str] = None,
+    thread_id: str | None = None,
 ) -> dict:
     originator = get_chatgpt_originator()
     user_agent = get_chatgpt_user_agent(originator)
@@ -241,6 +242,8 @@ def get_chatgpt_default_headers(
     }
     if session_id:
         headers["session_id"] = session_id
+    if thread_id:
+        headers["thread-id"] = thread_id
     if account_id:
         headers["ChatGPT-Account-Id"] = account_id
     return headers
@@ -293,6 +296,24 @@ def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
     if litellm_call_id:
         return str(litellm_call_id)
     return None
+
+
+def get_chatgpt_thread_id(litellm_params: Any | None) -> str | None:
+    params = _normalize_litellm_params(litellm_params)
+    proxy_server_request = params.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return None
+    headers = proxy_server_request.get("headers")
+    if not isinstance(headers, dict):
+        return None
+    return next(
+        (
+            str(value)
+            for key, value in headers.items()
+            if isinstance(key, str) and key.lower() in ("thread-id", "thread_id") and value
+        ),
+        None,
+    )
 
 
 def ensure_chatgpt_session_id(litellm_params: Optional[Any]) -> str:
