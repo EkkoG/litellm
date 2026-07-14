@@ -86,6 +86,36 @@ const sidebarEventNames = () =>
   screen.queryAllByText(/^(llm-early|llm-late|tool-early|tool-late)$/).map((el) => el.textContent);
 
 describe("LogDetailsDrawer session sidebar sorting", () => {
+  it("shows each request's prompt cache rate in the session sidebar", async () => {
+    vi.mocked(sessionSpendLogsCall).mockResolvedValue({
+      data: [
+        makeLog({
+          request_id: "cached-request",
+          model: "cached-model",
+          prompt_tokens: 4000,
+          metadata: {
+            additional_usage_values: {
+              prompt_tokens_details: {
+                cached_tokens: 3000,
+              },
+            },
+          },
+        }),
+      ],
+      total: 1,
+      total_pages: 1,
+    });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LogDetailsDrawer open onClose={() => {}} logEntry={null} sessionId="session-1" accessToken="token" />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByText("75.0% cache")).toBeInTheDocument();
+  });
+
   it("defaults to duration order, longest call first across LLM and MCP calls", async () => {
     renderSessionDrawer();
     await waitFor(() => expect(sidebarEventNames()).toHaveLength(4));

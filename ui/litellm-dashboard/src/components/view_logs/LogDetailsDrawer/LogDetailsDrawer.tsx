@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Button, Drawer, Segmented } from "antd";
+import { Button, Drawer, Segmented, Tooltip } from "antd";
 import { CheckOutlined, CopyOutlined, LeftOutlined, RightOutlined } from "@ant-design/icons";
 import { Bot, Sparkles, Wrench } from "lucide-react";
 import { LogEntry } from "../columns";
@@ -14,6 +14,7 @@ import { getSpendString } from "@/utils/dataUtils";
 import { normalizeGuardrailEntries, sortSessionLogs, SessionLogSortMode } from "./utils";
 import { DRAWER_WIDTH } from "./constants";
 import { useLogDetails } from "@/app/(dashboard)/hooks/logDetails/useLogDetails";
+import { getPromptCacheReadTokens } from "../logs_utils";
 
 export interface LogDetailsDrawerProps {
   open: boolean;
@@ -44,11 +45,17 @@ interface TraceEventRowProps {
   row: LogEntry;
   isSelected: boolean;
   onClick: () => void;
+  showPromptCache?: boolean;
 }
 
-function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
+function TraceEventRow({ row, isSelected, onClick, showPromptCache = false }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
   const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
+  const cacheReadTokens = getPromptCacheReadTokens(row.metadata);
+  const promptCacheRate =
+    showPromptCache && cacheReadTokens !== undefined && row.prompt_tokens > 0
+      ? (cacheReadTokens / row.prompt_tokens) * 100
+      : undefined;
   const durationValue =
     row.request_duration_ms != null
       ? (row.request_duration_ms / 1000).toFixed(3)
@@ -88,6 +95,16 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
           <>
             <span>·</span>
             <span>{row.total_tokens} tok</span>
+          </>
+        ) : null}
+        {promptCacheRate !== undefined ? (
+          <>
+            <span>·</span>
+            <Tooltip
+              title={`${cacheReadTokens.toLocaleString()} cached / ${row.prompt_tokens.toLocaleString()} prompt tokens`}
+            >
+              <span>{promptCacheRate.toFixed(1)}% cache</span>
+            </Tooltip>
           </>
         ) : null}
       </div>
@@ -422,6 +439,7 @@ export function LogDetailsDrawer({
                           <TraceEventRow
                             row={row}
                             isSelected={row.request_id === currentLog.request_id}
+                            showPromptCache
                             onClick={() => {
                               setSelectedSessionRequestId(row.request_id);
                               onSelectLog?.(row);
