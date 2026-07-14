@@ -45,17 +45,14 @@ interface TraceEventRowProps {
   row: LogEntry;
   isSelected: boolean;
   onClick: () => void;
-  showPromptCache?: boolean;
 }
 
-function TraceEventRow({ row, isSelected, onClick, showPromptCache = false }: TraceEventRowProps) {
+function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
   const isMcp = MCP_CALL_TYPES.includes(row.call_type);
   const isAgent = AGENT_CALL_TYPES.includes(row.call_type);
   const cacheReadTokens = getPromptCacheReadTokens(row.metadata);
   const promptCacheRate =
-    showPromptCache && cacheReadTokens !== undefined && row.prompt_tokens > 0
-      ? (cacheReadTokens / row.prompt_tokens) * 100
-      : undefined;
+    cacheReadTokens !== undefined && row.prompt_tokens > 0 ? (cacheReadTokens / row.prompt_tokens) * 100 : undefined;
   const durationValue =
     row.request_duration_ms != null
       ? (row.request_duration_ms / 1000).toFixed(3)
@@ -439,7 +436,6 @@ export function LogDetailsDrawer({
                           <TraceEventRow
                             row={row}
                             isSelected={row.request_id === currentLog.request_id}
-                            showPromptCache
                             onClick={() => {
                               setSelectedSessionRequestId(row.request_id);
                               onSelectLog?.(row);
