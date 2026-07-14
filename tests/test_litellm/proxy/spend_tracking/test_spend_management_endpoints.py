@@ -74,7 +74,7 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     ``LIMIT`` (bounded count query).
     """
     where: dict = {}
-    clause = re.search(r"WHERE (.*?)\s+(?:ORDER BY|LIMIT)", sql_query, re.DOTALL)
+    clause = re.search(r"WHERE (.*?)\s+(?:GROUP BY|ORDER BY|LIMIT)", sql_query, re.DOTALL)
     if clause is None:
         return where
 
@@ -180,6 +180,15 @@ def make_ui_spend_logs_mock_prisma(mock_spend_logs, filter_fn, team_lookup_fn=No
             if "mcp_tool_call_count" in sql_query:
                 return []
             filtered = filter_fn(_reconstruct_ui_where_from_sql(sql_query, params))
+            grouped_by_session = "CASE WHEN session_id IS NULL OR session_id = ''" in sql_query
+            if grouped_by_session:
+                unique_logs = {}
+                for log in filtered:
+                    group_key = (
+                        f"session:{log['session_id']}" if log.get("session_id") else f"request:{log['request_id']}"
+                    )
+                    unique_logs.setdefault(group_key, log)
+                filtered = list(unique_logs.values())
             total = len(filtered)
             if "COUNT(*)" in sql_query:
                 cap_plus_one = params[-1]
@@ -617,10 +626,10 @@ async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
 @pytest.mark.parametrize(
     "session_id_query,expected_request_ids",
     [
-        ("session-filter-demo-1", {"req1", "req2"}),
+        ("session-filter-demo-1", {"req1"}),
         ("session-filter-demo-2", {"req3"}),
-        ("session-filter", {"req1", "req2", "req3"}),
-        ("demo", {"req1", "req2", "req3"}),
+        ("session-filter", {"req1", "req3"}),
+        ("demo", {"req1", "req3"}),
         ("no-such-session", set()),
     ],
 )
