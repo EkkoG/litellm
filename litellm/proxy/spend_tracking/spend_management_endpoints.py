@@ -1970,18 +1970,12 @@ async def ui_view_spend_logs(
         else:
             _order_expr = order_column
 
-        session_group_expr = (
-            "CASE WHEN session_id IS NULL OR session_id = '' "
-            "THEN 'request:' || request_id ELSE 'session:' || session_id END"
-        )
-        count_group_clause = "" if is_v2 else f"GROUP BY {session_group_expr}"
         count_query = f"""
             SELECT COUNT(*) AS total_count
             FROM (
                 SELECT 1
                 FROM "LiteLLM_SpendLogs"
                 WHERE {" AND ".join(sql_conditions)}
-                {count_group_clause}
                 LIMIT ${p}
             ) AS bounded_matches
         """
@@ -1990,7 +1984,8 @@ async def ui_view_spend_logs(
         total_is_capped = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         total_records = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
-        selected_columns = """
+        sql_query = f"""
+            SELECT
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
                 "completionStartTime", model, model_id, model_group,
@@ -1999,30 +1994,11 @@ async def ui_view_spend_logs(
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
+            FROM "LiteLLM_SpendLogs"
+            WHERE {" AND ".join(sql_conditions)}
+            ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+            LIMIT ${p} OFFSET ${p + 1}
         """
-        if is_v2:
-            sql_query = f"""
-                SELECT {selected_columns}
-                FROM "LiteLLM_SpendLogs"
-                WHERE {" AND ".join(sql_conditions)}
-                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
-                LIMIT ${p} OFFSET ${p + 1}
-            """
-        else:
-            sql_query = f"""
-                SELECT {selected_columns}
-                FROM (
-                    SELECT DISTINCT ON ({session_group_expr}) {selected_columns}
-                    FROM "LiteLLM_SpendLogs"
-                    WHERE {" AND ".join(sql_conditions)}
-                    ORDER BY {session_group_expr},
-                             {_order_expr} {_sql_dir}{_nulls_clause},
-                             "startTime" {_sql_dir}, request_id {_sql_dir}
-                ) AS grouped_sessions
-                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause},
-                         "startTime" {_sql_dir}, request_id {_sql_dir}
-                LIMIT ${p} OFFSET ${p + 1}
-            """
         sql_params.extend([page_size, skip])
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
