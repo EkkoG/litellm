@@ -66,6 +66,7 @@ describe("SpendLogsTable", () => {
     vi.clearAllMocks();
     // Clear sessionStorage to avoid isLiveTail state from previous tests
     sessionStorage.clear();
+    window.history.replaceState({}, "", "/");
   });
 
   it("should call handleFilterResetFromHook when Reset Filters is clicked", async () => {
@@ -226,7 +227,13 @@ describe("SpendLogsTable", () => {
     renderWithProviders(<SpendLogsTable {...defaultProps} userRole="Internal User" userID="export-user" />);
 
     await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled(), { timeout: 5000 });
-    const exportButton = await screen.findByRole("button", { name: "Export JSON" });
+    await user.click(screen.getByText("Requests"));
+    await waitFor(() =>
+      expect(uiSpendLogsCall).toHaveBeenLastCalledWith(
+        expect.objectContaining({ params: expect.objectContaining({ view: "request" }) }),
+      ),
+    );
+    const exportButton = await screen.findByRole("button", { name: "Export Requests" });
     await waitFor(() => expect(exportButton).toBeEnabled(), { timeout: 5000 });
     await user.click(exportButton);
 

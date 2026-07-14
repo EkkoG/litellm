@@ -1,3 +1,5 @@
+import type { SessionLogEntry } from "./session_columns";
+
 export interface LogDetailsPayload {
   messages?: unknown;
   response?: unknown;
@@ -182,6 +184,28 @@ export const createLogExport = async (
       message: error instanceof Error ? error.message : "Failed to load request and response details",
     };
   }
+};
+
+export const createSessionLogExport = (
+  sessions: readonly SessionLogEntry[],
+  exportedAt: Date = new Date(),
+): LogExportResult => {
+  const timestamp = exportedAt.toISOString();
+  return {
+    status: "success",
+    file: {
+      name: `session_logs_${timestamp.replace(/[:.]/g, "-")}.json`,
+      contents: JSON.stringify(
+        {
+          exported_at: timestamp,
+          session_count: sessions.length,
+          sessions,
+        },
+        null,
+        2,
+      ),
+    },
+  };
 };
 
 export const downloadLogExport = (file: LogExportFile): void => {

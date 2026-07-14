@@ -92,6 +92,16 @@ describe("useLogFilterLogic", () => {
     });
   });
 
+  it("requests the selected session or request view from the backend", async () => {
+    renderFilterHook({ viewMode: "request" });
+
+    await waitFor(() =>
+      expect(uiSpendLogsCall).toHaveBeenCalledWith(
+        expect.objectContaining({ params: expect.objectContaining({ view: "request" }) }),
+      ),
+    );
+  });
+
   describe("handleFilterReset", () => {
     it("restores filters to defaults after changes", () => {
       const { result } = renderFilterHook();

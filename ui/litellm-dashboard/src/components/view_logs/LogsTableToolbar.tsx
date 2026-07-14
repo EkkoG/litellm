@@ -9,6 +9,7 @@ import type { PaginatedResponse } from "./log_filter_logic";
 interface LogsTableToolbarProps {
   searchTerm: string;
   onSearchChange: (value: string) => void;
+  searchPlaceholder?: string;
   startTime: string;
   onStartTimeChange: (value: string) => void;
   endTime: string;
@@ -28,12 +29,14 @@ interface LogsTableToolbarProps {
   onExport: () => void;
   isExporting: boolean;
   exportDisabled: boolean;
-  filteredLogs: PaginatedResponse;
+  exportLabel?: string;
+  filteredLogs: PaginatedResponse<unknown>;
 }
 
 export function LogsTableToolbar({
   searchTerm,
   onSearchChange,
+  searchPlaceholder = "Search by Request ID",
   startTime,
   onStartTimeChange,
   endTime,
@@ -53,6 +56,7 @@ export function LogsTableToolbar({
   onExport,
   isExporting,
   exportDisabled,
+  exportLabel = "Export JSON",
   filteredLogs,
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
@@ -81,7 +85,7 @@ export function LogsTableToolbar({
             <div className="relative w-64 min-w-0 shrink-0">
               <input
                 type="text"
-                placeholder="Search by Request ID"
+                placeholder={searchPlaceholder}
                 className="w-full px-3 py-2 pl-8 border rounded-md text-sm focus:outline-hidden focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 value={searchTerm}
                 onChange={(e) => onSearchChange(e.target.value)}
@@ -174,10 +178,14 @@ export function LogsTableToolbar({
                 onClick={onExport}
                 loading={isExporting}
                 disabled={isExporting || exportDisabled}
-                title="Export the current page with request and response JSON"
-                aria-label="Export JSON"
+                title={
+                  exportLabel === "Export Sessions"
+                    ? "Export the current page of session summaries"
+                    : "Export the current page with request and response JSON"
+                }
+                aria-label={exportLabel}
               >
-                {isExporting ? "Exporting" : "Export JSON"}
+                {isExporting ? "Exporting" : exportLabel}
               </Button>
             </div>
 

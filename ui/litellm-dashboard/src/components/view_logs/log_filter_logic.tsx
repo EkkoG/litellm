@@ -8,9 +8,13 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { defaultPageSize } from "../constants";
 import type { LogEntry, LogsSortField } from "./columns";
+import type { SessionLogEntry } from "./session_columns";
 
-export interface PaginatedResponse {
-  data: LogEntry[];
+export type LogsViewMode = "session" | "request";
+export type LogsPageRow = LogEntry | SessionLogEntry;
+
+export interface PaginatedResponse<T = LogEntry> {
+  data: T[];
   total: number;
   page: number;
   page_size: number;
@@ -86,6 +90,7 @@ export function useLogFilterLogic({
   sortBy = "startTime",
   sortOrder = "desc",
   currentPage = 1,
+  viewMode = "session",
 }: {
   accessToken: string | null;
   token: string | null;
@@ -104,6 +109,7 @@ export function useLogFilterLogic({
   sortBy?: LogsSortField;
   sortOrder?: "asc" | "desc";
   currentPage?: number;
+  viewMode?: LogsViewMode;
 }) {
   const [debouncedFilters, setDebouncedFilters] = useState(filters);
   const debouncer = useDebouncer(setDebouncedFilters, { wait: DEBOUNCE_WAIT_MS });
@@ -120,7 +126,7 @@ export function useLogFilterLogic({
     return merged;
   }, [filters, debouncedFilters]);
 
-  const logsQuery = useQuery<PaginatedResponse>({
+  const logsQuery = useQuery<PaginatedResponse<LogsPageRow>>({
     queryKey: [
       "logs",
       "table",
@@ -133,6 +139,7 @@ export function useLogFilterLogic({
       filterByCurrentUser ? userID : null,
       sortBy,
       sortOrder,
+      viewMode,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -157,6 +164,7 @@ export function useLogFilterLogic({
         page: currentPage,
         page_size: pageSize,
         params: {
+          view: viewMode,
           api_key: effectiveFilters[FILTER_KEYS.KEY_HASH] || undefined,
           team_id: effectiveFilters[FILTER_KEYS.TEAM_ID] || undefined,
           request_id: effectiveFilters[FILTER_KEYS.REQUEST_ID] || undefined,
@@ -183,7 +191,7 @@ export function useLogFilterLogic({
     refetchIntervalInBackground: false,
   });
 
-  const filteredLogs: PaginatedResponse = logsQuery.data ?? {
+  const filteredLogs: PaginatedResponse<LogsPageRow> = logsQuery.data ?? {
     data: [],
     total: 0,
     page: 1,

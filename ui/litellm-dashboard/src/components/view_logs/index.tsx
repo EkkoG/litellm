@@ -1,6 +1,7 @@
 import moment from "moment";
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { Tab, TabGroup, TabList, TabPanel, TabPanels } from "@tremor/react";
+import { Segmented } from "antd";
 import NotificationsManager from "../molecules/notifications_manager";
 import { internalUserRoles } from "../../utils/roles";
 import DeletedKeysPage from "../DeletedKeysPage/DeletedKeysPage";
@@ -11,14 +12,20 @@ import { keyInfoV1Call, uiSpendLogDetailsCall } from "../networking";
 import KeyInfoView from "../templates/key_info_view";
 import AuditLogs from "./audit_logs";
 import { createColumns, LogEntry, type LogsSortField } from "./columns";
-import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
 import { getLogFilterOptions } from "./filter_options";
-import { useLogFilterLogic, defaultFilters, type LogFilterState } from "./log_filter_logic";
+import {
+  useLogFilterLogic,
+  defaultFilters,
+  type LogFilterState,
+  type LogsPageRow,
+  type LogsViewMode,
+} from "./log_filter_logic";
 import { LogDetailsDrawer } from "./LogDetailsDrawer";
 import { LogsTableToolbar } from "./LogsTableToolbar";
 import { DataTable } from "./table";
 import { AntDLoadingSpinner } from "../ui/AntDLoadingSpinner";
-import { createLogExport, downloadLogExport, parseLogDetailsPayload } from "./log_export";
+import { createLogExport, createSessionLogExport, downloadLogExport, parseLogDetailsPayload } from "./log_export";
+import { createSessionColumns, type SessionLogEntry } from "./session_columns";
 
 interface SpendLogsTableProps {
   accessToken: string | null;
@@ -27,6 +34,42 @@ interface SpendLogsTableProps {
   userID: string | null;
   premiumUser: boolean;
 }
+
+const isSessionLogEntry = (row: LogsPageRow): row is SessionLogEntry => "row_type" in row;
+
+const toStandaloneLogEntry = (row: SessionLogEntry): LogEntry | null => {
+  if (!row.request_id) return null;
+
+  return {
+    request_id: row.request_id,
+    api_key: row.api_keys?.[0] ?? "",
+    team_id: row.team_ids?.[0] ?? "",
+    model: row.primary_model ?? row.models?.[0] ?? "",
+    model_id: row.model_id ?? "",
+    api_base: row.api_base ?? undefined,
+    call_type: row.call_type,
+    spend: row.session_spend,
+    total_tokens: row.session_total_tokens,
+    prompt_tokens: row.session_prompt_tokens,
+    completion_tokens: row.session_completion_tokens,
+    startTime: row.session_start_time,
+    endTime: row.session_end_time,
+    user: row.users?.[0],
+    end_user: row.end_users?.[0],
+    metadata: {
+      status: row.failure_count > 0 ? "failure" : "success",
+      user_api_key_team_alias: row.team_names?.[0],
+      user_api_key_alias: row.key_aliases?.[0],
+      additional_usage_values: {
+        prompt_tokens_details: { cached_tokens: row.session_cache_read_tokens },
+      },
+    },
+    cache_hit: row.session_cache_read_tokens > 0 ? "true" : "false",
+    messages: [],
+    response: {},
+    request_duration_ms: row.session_duration_ms,
+  };
+};
 
 export default function SpendLogsTable({ accessToken, token, userRole, userID, premiumUser }: SpendLogsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
@@ -43,6 +86,10 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   const [selectedKeyIdInfoView, setSelectedKeyIdInfoView] = useState<string | null>(null);
   const [filterByCurrentUser, setFilterByCurrentUser] = useState(userRole && internalUserRoles.includes(userRole));
   const [activeTab, setActiveTab] = useState("request logs");
+  const [viewMode, setViewMode] = useState<LogsViewMode>(() => {
+    if (typeof window === "undefined") return "session";
+    return new URLSearchParams(window.location.search).get("view") === "request" ? "request" : "session";
+  });
 
   const [selectedLog, setSelectedLog] = useState<LogEntry | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -66,6 +113,12 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
   useEffect(() => {
     sessionStorage.setItem("isLiveTail", JSON.stringify(isLiveTail));
   }, [isLiveTail]);
+
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("view", viewMode);
+    window.history.replaceState(window.history.state, "", url);
+  }, [viewMode]);
 
   useEffect(() => {
     const fetchKeyInfo = async () => {
@@ -113,6 +166,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     sortBy,
     sortOrder,
     currentPage,
+    viewMode,
   });
 
   const handleFilterReset = useCallback(() => {
@@ -130,121 +184,108 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     setCurrentPage(1);
   }, []);
 
-  const columns = useMemo(
+  const requestColumns = useMemo(
     () => createColumns({ sortBy, sortOrder, onSortChange: handleSortChange }),
     [sortBy, sortOrder, handleSortChange],
   );
 
-  const searchedLogs = useMemo(
+  const sessionColumns = useMemo(
+    () => createSessionColumns({ sortBy, sortOrder, onSortChange: handleSortChange }),
+    [sortBy, sortOrder, handleSortChange],
+  );
+
+  const requestLogs = useMemo(
+    () => filteredLogs.data.filter((row): row is LogEntry => !isSessionLogEntry(row)),
+    [filteredLogs.data],
+  );
+
+  const sessionLogs = useMemo(() => filteredLogs.data.filter(isSessionLogEntry), [filteredLogs.data]);
+
+  const searchedRequestLogs = useMemo(
     () =>
-      filteredLogs.data.filter((log) => {
-        const matchesSearch =
+      requestLogs.filter(
+        (log) =>
           !searchTerm ||
           log.request_id.includes(searchTerm) ||
           log.model.includes(searchTerm) ||
-          (log.user && log.user.includes(searchTerm));
-
-        return matchesSearch;
-      }),
-    [filteredLogs.data, searchTerm],
+          Boolean(log.user?.includes(searchTerm)),
+      ),
+    [requestLogs, searchTerm],
   );
 
-  const filteredData = useMemo(() => {
-    const sessionCompositionById = searchedLogs.reduce<Record<string, { llm: number; agent: number; mcp: number }>>(
-      (acc, log) => {
-        if (!log.session_id) return acc;
-        if (!acc[log.session_id]) {
-          acc[log.session_id] = { llm: 0, agent: 0, mcp: 0 };
-        }
-        if (MCP_CALL_TYPES.includes(log.call_type)) {
-          acc[log.session_id].mcp += 1;
-        } else if (AGENT_CALL_TYPES.includes(log.call_type)) {
-          acc[log.session_id].agent += 1;
-        } else {
-          acc[log.session_id].llm += 1;
-        }
-        return acc;
-      },
-      {},
-    );
+  const searchedSessionLogs = useMemo(
+    () =>
+      sessionLogs.filter(
+        (row) =>
+          !searchTerm ||
+          Boolean(row.session_id?.includes(searchTerm)) ||
+          Boolean(row.request_id?.includes(searchTerm)) ||
+          row.models?.some((model) => model.includes(searchTerm)) ||
+          row.users?.some((user) => user.includes(searchTerm)),
+      ),
+    [sessionLogs, searchTerm],
+  );
 
-    // Build a single-pass map of session_id → representative request_id.
-    // Prefers an LLM row over an MCP row as the representative.
-    const sessionRepresentativeMap = new Map<string, { requestId: string; isMcp: boolean }>();
-    for (const log of searchedLogs) {
-      if (!log.session_id || (log.session_total_count || 1) <= 1) continue;
-      const isMcp = MCP_CALL_TYPES.includes(log.call_type);
-      const existing = sessionRepresentativeMap.get(log.session_id);
-      if (!existing || (existing.isMcp && !isMcp)) {
-        sessionRepresentativeMap.set(log.session_id, { requestId: log.request_id, isMcp });
-      }
-    }
-
-    return (
-      searchedLogs
-        .map((log) => {
-          const sessionComposition = log.session_id ? sessionCompositionById[log.session_id] : undefined;
-          return {
-            ...log,
-            request_duration_ms: log.request_duration_ms,
-            session_llm_count: sessionComposition?.llm ?? undefined,
-            session_mcp_count: sessionComposition?.mcp ?? undefined,
-            session_agent_count: sessionComposition?.agent ?? undefined,
-            onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
-            onSessionClick: (sessionId: string) => {
-              if (sessionId) {
-                setSelectedSessionId(sessionId);
-                setSelectedLog(log);
-                setIsDrawerOpen(true);
-              }
-            },
-          };
-        })
-        // Deduplicate multi-call sessions using the pre-built map (O(1) per row).
-        .filter((log) => {
-          if (!log.session_id || (log.session_total_count || 1) <= 1) return true;
-          return sessionRepresentativeMap.get(log.session_id)?.requestId === log.request_id;
-        })
-    );
-  }, [searchedLogs]);
+  const requestTableData = useMemo(
+    () =>
+      searchedRequestLogs.map((log) => ({
+        ...log,
+        onKeyHashClick: (keyHash: string) => setSelectedKeyIdInfoView(keyHash),
+        onSessionClick: (sessionId: string) => {
+          if (!sessionId) return;
+          setSelectedSessionId(sessionId);
+          setSelectedLog(log);
+          setIsDrawerOpen(true);
+        },
+      })),
+    [searchedRequestLogs],
+  );
 
   const handleExport = useCallback(async () => {
-    if (!accessToken || searchedLogs.length === 0) return;
+    const exportCount = viewMode === "session" ? searchedSessionLogs.length : searchedRequestLogs.length;
+    if (!accessToken || exportCount === 0) return;
 
     setIsExporting(true);
     try {
-      const result = await createLogExport(searchedLogs, async (requestId) => {
-        const details: unknown = await uiSpendLogDetailsCall(
-          accessToken,
-          requestId,
-          moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss"),
-        );
-        return parseLogDetailsPayload(details);
-      });
+      const result =
+        viewMode === "session"
+          ? createSessionLogExport(searchedSessionLogs)
+          : await createLogExport(searchedRequestLogs, async (requestId) => {
+              const details: unknown = await uiSpendLogDetailsCall(
+                accessToken,
+                requestId,
+                moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss"),
+              );
+              return parseLogDetailsPayload(details);
+            });
 
       if (result.status === "error") {
-        NotificationsManager.fromBackend(`Failed to export request logs: ${result.message}`);
+        NotificationsManager.fromBackend(`Failed to export ${viewMode} logs: ${result.message}`);
         return;
       }
 
       downloadLogExport(result.file);
-      NotificationsManager.success(`Exported ${searchedLogs.length} request logs with request and response JSON`);
+      NotificationsManager.success(`Exported ${exportCount} ${viewMode} logs`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Failed to download request logs";
-      NotificationsManager.fromBackend(`Failed to export request logs: ${message}`);
+      const message = error instanceof Error ? error.message : `Failed to download ${viewMode} logs`;
+      NotificationsManager.fromBackend(`Failed to export ${viewMode} logs: ${message}`);
     } finally {
       setIsExporting(false);
     }
-  }, [accessToken, searchedLogs, startTime]);
+  }, [accessToken, searchedRequestLogs, searchedSessionLogs, startTime, viewMode]);
 
   // Keep the Fetch button busy until the table has actually committed the new
   // rows. `keepPreviousData` leaves logsQuery.isLoading false on refetch, so
   // without this the button clears while stale rows are still on screen.
-  const deferredData = useDeferredValue(filteredData);
-  const isStale = deferredData !== filteredData;
+  const deferredRequestData = useDeferredValue(requestTableData);
+  const deferredSessionData = useDeferredValue(searchedSessionLogs);
+  const isStale =
+    viewMode === "session" ? deferredSessionData !== searchedSessionLogs : deferredRequestData !== requestTableData;
   const isButtonLoading = logsQuery.isFetching || isStale;
   const isRefiltering = logsQuery.isPlaceholderData;
   const isLogsLoading = logsQuery.isLoading || isRefiltering;
+  const sessionDrawerLogs = selectedLog ? [selectedLog] : [];
+  const drawerLogs = viewMode === "request" ? requestTableData : sessionDrawerLogs;
 
   if (!accessToken || !token || !userRole || !userID) {
     return (
@@ -254,18 +295,37 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
     );
   }
 
-  const handleRowClick = (log: LogEntry) => {
-    // Multi-call session row: open in the same right-side drawer (session mode)
-    if (log.session_id && (log.session_total_count || 1) > 1) {
-      setSelectedSessionId(log.session_id);
-      setSelectedLog(log);
-      setIsDrawerOpen(true);
-      return;
-    }
-    // Single-call row: open the detail drawer
+  const handleRequestRowClick = (log: LogEntry) => {
     setSelectedSessionId(null);
     setSelectedLog(log);
     setIsDrawerOpen(true);
+  };
+
+  const handleSessionRowClick = (row: SessionLogEntry) => {
+    if (row.row_type === "session" && row.session_id) {
+      setSelectedSessionId(row.session_id);
+      setSelectedLog(null);
+      setIsDrawerOpen(true);
+      return;
+    }
+
+    const standaloneLog = toStandaloneLogEntry(row);
+    if (!standaloneLog) return;
+    setSelectedSessionId(null);
+    setSelectedLog(standaloneLog);
+    setIsDrawerOpen(true);
+  };
+
+  const handleViewModeChange = (nextViewMode: LogsViewMode) => {
+    if (nextViewMode === viewMode) return;
+    setViewMode(nextViewMode);
+    setCurrentPage(1);
+    setSearchTerm("");
+    setSortBy("startTime");
+    setSortOrder("desc");
+    setSelectedSessionId(null);
+    setSelectedLog(null);
+    setIsDrawerOpen(false);
   };
 
   return (
@@ -281,6 +341,14 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
           <TabPanel>
             <div className="flex items-center justify-between mb-4">
               <h1 className="text-xl font-semibold">Request Logs</h1>
+              <Segmented
+                options={[
+                  { label: "Sessions", value: "session" },
+                  { label: "Requests", value: "request" },
+                ]}
+                value={viewMode}
+                onChange={(value) => handleViewModeChange(value as LogsViewMode)}
+              />
             </div>
             {selectedKeyInfo && selectedKeyIdInfoView && selectedKeyInfo.api_key === selectedKeyIdInfoView ? (
               <KeyInfoView
@@ -301,6 +369,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                   <LogsTableToolbar
                     searchTerm={searchTerm}
                     onSearchChange={setSearchTerm}
+                    searchPlaceholder={viewMode === "session" ? "Search by Session ID" : "Search by Request ID"}
                     startTime={startTime}
                     onStartTimeChange={setStartTime}
                     endTime={endTime}
@@ -319,16 +388,30 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
                     onRefetch={() => logsQuery.refetch()}
                     onExport={handleExport}
                     isExporting={isExporting}
-                    exportDisabled={searchedLogs.length === 0 || isLogsLoading}
+                    exportDisabled={
+                      (viewMode === "session" ? searchedSessionLogs.length === 0 : searchedRequestLogs.length === 0) ||
+                      isLogsLoading
+                    }
+                    exportLabel={viewMode === "session" ? "Export Sessions" : "Export Requests"}
                     filteredLogs={filteredLogs}
                   />
-                  <DataTable
-                    columns={columns}
-                    data={deferredData}
-                    getRowId={(row) => row.request_id}
-                    onRowClick={handleRowClick}
-                    isLoading={isLogsLoading}
-                  />
+                  {viewMode === "session" ? (
+                    <DataTable
+                      columns={sessionColumns}
+                      data={deferredSessionData}
+                      getRowId={(row) => row.group_id}
+                      onRowClick={handleSessionRowClick}
+                      isLoading={isLogsLoading}
+                    />
+                  ) : (
+                    <DataTable
+                      columns={requestColumns}
+                      data={deferredRequestData}
+                      getRowId={(row) => row.request_id}
+                      onRowClick={handleRequestRowClick}
+                      isLoading={isLogsLoading}
+                    />
+                  )}
                 </div>
               </>
             )}
@@ -362,7 +445,7 @@ export default function SpendLogsTable({ accessToken, token, userRole, userID, p
         logEntry={selectedLog}
         sessionId={selectedSessionId}
         accessToken={accessToken}
-        allLogs={filteredData}
+        allLogs={drawerLogs}
         onSelectLog={setSelectedLog}
         startTime={moment(startTime).utc().format("YYYY-MM-DD HH:mm:ss")}
       />
