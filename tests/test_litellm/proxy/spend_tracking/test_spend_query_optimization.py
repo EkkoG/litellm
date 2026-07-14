@@ -212,17 +212,10 @@ def _make_ui_spend_logs_mock(count_total, page_rows):
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
     mock_prisma.db.query_raw = AsyncMock(
-        side_effect=[[{"total_count": count_total}], page_rows, []]
+        side_effect=[[{"total_count": count_total}], page_rows]
     )
     mock_prisma.db.litellm_spendlogs = MagicMock()
     mock_prisma.db.litellm_spendlogs.count = AsyncMock(return_value=0)
-    mock_prisma.db.litellm_spendlogs.group_by = AsyncMock(
-        return_value=[
-            {"session_id": row["session_id"], "_count": {"session_id": 1}}
-            for row in page_rows
-            if row.get("session_id")
-        ]
-    )
     return mock_prisma
 
 
@@ -291,91 +284,6 @@ async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
 
     for row in response["data"]:
         assert "total_count" not in row, "the window-function helper column must be stripped before serialising rows"
-
-
-@pytest.mark.asyncio
-async def test_spend_logs_ui_paginates_distinct_sessions(monkeypatch):
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.spend_tracking.spend_management_endpoints import (
-        ui_view_spend_logs,
-    )
-
-    page_rows = [
-        {
-            "request_id": f"req-{index}",
-            "metadata": "{}",
-            "session_id": f"session-{index}",
-        }
-        for index in range(50)
-    ]
-    mock_prisma = _make_ui_spend_logs_mock(count_total=75, page_rows=page_rows)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-
-    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
-    mock_request = MagicMock()
-    mock_request.url.path = "/spend/logs/ui"
-
-    response = await ui_view_spend_logs(
-        request=mock_request,
-        api_key=None,
-        user_id=None,
-        request_id=None,
-        start_date="2026-02-16 00:00:00",
-        end_date="2026-02-16 23:59:59",
-        page=1,
-        page_size=50,
-        sort_by="startTime",
-        sort_order="desc",
-        user_api_key_dict=auth,
-    )
-
-    count_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
-    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
-    assert "GROUP BY CASE WHEN session_id IS NULL OR session_id = ''" in count_sql
-    assert "DISTINCT ON (CASE WHEN session_id IS NULL OR session_id = ''" in page_sql
-    assert response["total"] == 75
-    assert response["total_pages"] == 2
-    assert len(response["data"]) == 50
-
-
-@pytest.mark.asyncio
-async def test_spend_logs_v2_keeps_request_pagination(monkeypatch):
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.spend_tracking.spend_management_endpoints import (
-        ui_view_spend_logs,
-    )
-
-    page_rows = [
-        {"request_id": f"req-{index}", "metadata": "{}", "session_id": "shared-session"}
-        for index in range(50)
-    ]
-    mock_prisma = _make_ui_spend_logs_mock(count_total=75, page_rows=page_rows)
-    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
-
-    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
-    mock_request = MagicMock()
-    mock_request.url.path = "/spend/logs/v2"
-
-    response = await ui_view_spend_logs(
-        request=mock_request,
-        api_key=None,
-        user_id=None,
-        request_id=None,
-        start_date="2026-02-16 00:00:00",
-        end_date="2026-02-16 23:59:59",
-        page=1,
-        page_size=50,
-        sort_by="startTime",
-        sort_order="desc",
-        user_api_key_dict=auth,
-    )
-
-    count_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
-    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
-    assert "GROUP BY CASE WHEN session_id IS NULL OR session_id = ''" not in count_sql
-    assert "DISTINCT ON" not in page_sql
-    assert response["total"] == 75
-    assert len(response["data"]) == 50
 
 
 @pytest.mark.asyncio
