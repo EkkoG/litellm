@@ -97,17 +97,19 @@ class TestChatGPTResponsesAPITransformation:
 
         config = ChatGPTResponsesAPIConfig()
         session_id = "019f56e3-35d1-7bd2-8e50-f54bbeceeae5"
+        thread_id = "019f59f7-1e39-74a1-b06a-49668f716c7f"
         headers = config.validate_environment(
             headers={},
             model="gpt-5.6",
             litellm_params=GenericLiteLLMParams(
                 litellm_trace_id="per-call-trace-id",
                 litellm_call_id="per-call-id",
-                proxy_server_request={"headers": {header_name: session_id}},
+                proxy_server_request={"headers": {header_name: session_id, "thread-id": thread_id}},
             ),
         )
 
         assert headers["session_id"] == session_id
+        assert headers["thread-id"] == thread_id
 
     @pytest.mark.parametrize(
         "model_name",
