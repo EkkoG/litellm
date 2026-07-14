@@ -98,7 +98,7 @@ function TraceEventRow({ row, isSelected, onClick }: TraceEventRowProps) {
           <>
             <span>·</span>
             <Tooltip
-              title={`${cacheReadTokens.toLocaleString()} cached / ${row.prompt_tokens.toLocaleString()} prompt tokens`}
+              title={`${(cacheReadTokens ?? 0).toLocaleString()} cached / ${row.prompt_tokens.toLocaleString()} prompt tokens`}
             >
               <span>{promptCacheRate.toFixed(1)}% cache</span>
             </Tooltip>

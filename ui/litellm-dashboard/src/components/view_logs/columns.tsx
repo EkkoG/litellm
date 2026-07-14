@@ -77,7 +77,7 @@ export type LogEntry = {
   onSessionClick?: (sessionId: string) => void;
 };
 
-const SortableHeader = ({
+export const SortableHeader = ({
   label,
   field,
   sortBy,

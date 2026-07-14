@@ -1648,6 +1648,7 @@ async def ui_view_spend_logs(
     ),
     page: int = fastapi.Query(default=1, description="Page number for pagination", ge=1),
     page_size: int = fastapi.Query(default=50, description="Number of items per page", ge=1, le=100),
+    view: Literal["session", "request"] | None = fastapi.Query(default=None, include_in_schema=False),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
@@ -1733,6 +1734,9 @@ async def ui_view_spend_logs(
         from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
         is_v2 = "/spend/logs/v2" in get_request_route(request)
+        resolved_view = view if isinstance(view, str) else None
+        is_session_view = not is_v2 and resolved_view == "session"
+        is_legacy_session_view = not is_v2 and resolved_view is None
         formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d"] if is_v2 else ["%Y-%m-%d %H:%M:%S"]
 
         def parse_date(date_str: str) -> datetime:
@@ -1974,7 +1978,7 @@ async def ui_view_spend_logs(
             "CASE WHEN session_id IS NULL OR session_id = '' "
             "THEN 'request:' || request_id ELSE 'session:' || session_id END"
         )
-        count_group_clause = "" if is_v2 else f"GROUP BY {session_group_expr}"
+        count_group_clause = f"GROUP BY {session_group_expr}" if is_session_view or is_legacy_session_view else ""
         count_query = f"""
             SELECT COUNT(*) AS total_count
             FROM (
@@ -1990,7 +1994,7 @@ async def ui_view_spend_logs(
         total_is_capped = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         total_records = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
-        selected_columns = """
+        request_columns = """
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
                 "completionStartTime", model, model_id, model_group,
@@ -2000,19 +2004,11 @@ async def ui_view_spend_logs(
                 session_id, status, mcp_namespaced_tool_name, agent_id,
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
         """
-        if is_v2:
+        if is_legacy_session_view:
             sql_query = f"""
-                SELECT {selected_columns}
-                FROM "LiteLLM_SpendLogs"
-                WHERE {" AND ".join(sql_conditions)}
-                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
-                LIMIT ${p} OFFSET ${p + 1}
-            """
-        else:
-            sql_query = f"""
-                SELECT {selected_columns}
+                SELECT {request_columns}
                 FROM (
-                    SELECT DISTINCT ON ({session_group_expr}) {selected_columns}
+                    SELECT DISTINCT ON ({session_group_expr}) {request_columns}
                     FROM "LiteLLM_SpendLogs"
                     WHERE {" AND ".join(sql_conditions)}
                     ORDER BY {session_group_expr},
@@ -2021,6 +2017,95 @@ async def ui_view_spend_logs(
                 ) AS grouped_sessions
                 ORDER BY {_order_expr} {_sql_dir}{_nulls_clause},
                          "startTime" {_sql_dir}, request_id {_sql_dir}
+                LIMIT ${p} OFFSET ${p + 1}
+            """
+        elif not is_session_view:
+            sql_query = f"""
+                SELECT {request_columns}
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+                LIMIT ${p} OFFSET ${p + 1}
+            """
+        else:
+            cache_read_tokens_expr = """
+                CASE
+                    WHEN metadata->'additional_usage_values'->>'cache_read_input_tokens' ~ '^[0-9]+(\\.[0-9]+)?$'
+                    THEN (metadata->'additional_usage_values'->>'cache_read_input_tokens')::double precision
+                    WHEN metadata->'additional_usage_values'->'prompt_tokens_details'->>'cached_tokens'
+                         ~ '^[0-9]+(\\.[0-9]+)?$'
+                    THEN (metadata->'additional_usage_values'->'prompt_tokens_details'->>'cached_tokens')::double precision
+                    ELSE 0
+                END
+            """
+            session_sort_expressions = {
+                "startTime": 'MAX("startTime")',
+                "endTime": 'MAX("endTime")',
+                "spend": "COALESCE(SUM(spend), 0)",
+                "total_tokens": "COALESCE(SUM(total_tokens), 0)",
+                "request_duration_ms": 'EXTRACT(EPOCH FROM (MAX("endTime") - MIN("startTime"))) * 1000',
+                "model": "MIN(model)",
+                "ttft_ms": (
+                    'MIN(CASE WHEN "completionStartTime" IS NULL OR "completionStartTime" = "endTime" '
+                    'THEN NULL ELSE EXTRACT(EPOCH FROM ("completionStartTime" - "startTime")) * 1000 END)'
+                ),
+            }
+            session_order_expr = session_sort_expressions[order_column]
+            session_nulls_clause = " NULLS LAST" if order_column in {"model", "ttft_ms"} else ""
+            sql_query = f"""
+                SELECT
+                    {session_group_expr} AS group_id,
+                    CASE WHEN MAX(NULLIF(session_id, '')) IS NULL THEN 'request' ELSE 'session' END AS row_type,
+                    MAX(NULLIF(session_id, '')) AS session_id,
+                    CASE WHEN MAX(NULLIF(session_id, '')) IS NULL THEN MAX(request_id) ELSE NULL END AS request_id,
+                    MIN("startTime") AS session_start_time,
+                    MAX("endTime") AS session_end_time,
+                    MAX("startTime") AS last_active,
+                    COUNT(*)::int AS request_count,
+                    COUNT(*)::int AS session_total_count,
+                    COALESCE(SUM(spend), 0)::double precision AS session_spend,
+                    COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
+                    (EXTRACT(EPOCH FROM (MAX("endTime") - MIN("startTime"))) * 1000)::double precision
+                        AS session_duration_ms,
+                    COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0)::bigint AS session_prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0)::bigint AS session_completion_tokens,
+                    COALESCE(SUM({cache_read_tokens_expr}), 0)::double precision AS session_cache_read_tokens,
+                    COUNT(*) FILTER (
+                        WHERE status = 'failure' OR metadata->>'status' = 'failure'
+                    )::int AS failure_count,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(status, 'success') <> 'failure'
+                          AND COALESCE(metadata->>'status', 'success') <> 'failure'
+                    )::int AS success_count,
+                    COUNT(*) FILTER (
+                        WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                    )::int AS mcp_count,
+                    COUNT(*) FILTER (WHERE call_type = 'asend_message')::int AS agent_count,
+                    COUNT(*) FILTER (
+                        WHERE call_type NOT IN ('call_mcp_tool', 'list_mcp_tools', 'asend_message')
+                    )::int AS llm_count,
+                    ARRAY_AGG(DISTINCT NULLIF(model, '')) FILTER (WHERE NULLIF(model, '') IS NOT NULL) AS models,
+                    ARRAY_AGG(DISTINCT NULLIF(custom_llm_provider, ''))
+                        FILTER (WHERE NULLIF(custom_llm_provider, '') IS NOT NULL) AS providers,
+                    ARRAY_AGG(DISTINCT NULLIF(team_id, '')) FILTER (WHERE NULLIF(team_id, '') IS NOT NULL) AS team_ids,
+                    ARRAY_AGG(DISTINCT NULLIF(api_key, '')) FILTER (WHERE NULLIF(api_key, '') IS NOT NULL) AS api_keys,
+                    ARRAY_AGG(DISTINCT NULLIF("user", '')) FILTER (WHERE NULLIF("user", '') IS NOT NULL) AS users,
+                    ARRAY_AGG(DISTINCT NULLIF(end_user, '')) FILTER (WHERE NULLIF(end_user, '') IS NOT NULL) AS end_users,
+                    ARRAY_AGG(DISTINCT NULLIF(metadata->>'user_api_key_team_alias', ''))
+                        FILTER (WHERE NULLIF(metadata->>'user_api_key_team_alias', '') IS NOT NULL) AS team_names,
+                    ARRAY_AGG(DISTINCT NULLIF(metadata->>'user_api_key_alias', ''))
+                        FILTER (WHERE NULLIF(metadata->>'user_api_key_alias', '') IS NOT NULL) AS key_aliases,
+                    (ARRAY_AGG(NULLIF(model, '') ORDER BY "startTime")
+                        FILTER (WHERE NULLIF(model, '') IS NOT NULL))[1] AS primary_model,
+                    MIN(call_type) AS call_type,
+                    MIN(model_id) AS model_id,
+                    MIN(api_base) AS api_base
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                GROUP BY {session_group_expr}
+                ORDER BY {session_order_expr} {_sql_dir}{session_nulls_clause},
+                         MAX("startTime") DESC, {session_group_expr}
                 LIMIT ${p} OFFSET ${p + 1}
             """
         sql_params.extend([page_size, skip])
@@ -2053,7 +2138,7 @@ async def ui_view_spend_logs(
             page,
             page_size,
             total_pages,
-            enrich_session_counts=not is_v2,
+            enrich_session_counts=is_session_view or is_legacy_session_view,
             total_is_capped=total_is_capped,
         )
     except Exception as e:
@@ -3395,6 +3480,16 @@ async def _build_ui_spend_logs_response(
         A dict with ``data`` (enriched rows), ``total``, ``page``,
         ``page_size``, ``total_pages``, and ``total_is_capped``.
     """
+    if enrich_session_counts and all(isinstance(row, dict) and row.get("row_type") for row in data):
+        return {
+            "data": data,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "total_is_capped": total_is_capped,
+        }
+
     count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids = list(
