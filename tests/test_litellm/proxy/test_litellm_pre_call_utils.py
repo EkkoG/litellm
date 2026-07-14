@@ -2560,6 +2560,24 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
+def test_codex_headers_do_not_set_litellm_chain_id():
+    data = {"metadata": {}}
+
+    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
+        headers={
+            "session-id": "019f596e-7581-7432-8f1e-674ce7d634b9",
+            "thread-id": "019f5a90-41ce-7922-8eeb-8e9d0558806d",
+        },
+        data=data,
+        _metadata_variable_name="metadata",
+    )
+
+    assert "session_id" not in data["metadata"]
+    assert "trace_id" not in data["metadata"]
+    assert "litellm_session_id" not in data
+    assert "litellm_trace_id" not in data
+
+
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {

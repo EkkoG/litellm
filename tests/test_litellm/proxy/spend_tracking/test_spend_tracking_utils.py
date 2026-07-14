@@ -27,6 +27,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_proxy_server_request_for_spend_logs_payload,
     _get_request_duration_ms,
     _get_response_for_spend_logs_payload,
+    _get_session_id_for_spend_log,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
     _hash_api_key_for_spend_log,
@@ -44,6 +45,36 @@ from litellm.types.utils import (
     StandardLoggingModelInformation,
     StandardLoggingPayload,
 )
+
+
+@pytest.mark.parametrize(
+    "headers,expected",
+    [
+        (
+            {
+                "session-id": "019f596e-7581-7432-8f1e-674ce7d634b9",
+                "thread-id": "019f5a90-41ce-7922-8eeb-8e9d0558806d",
+            },
+            "019f596e-7581-7432-8f1e-674ce7d634b9",
+        ),
+        (
+            {
+                "x-litellm-trace-id": "explicit-trace-id",
+                "session-id": "019f596e-7581-7432-8f1e-674ce7d634b9",
+                "thread-id": "019f5a90-41ce-7922-8eeb-8e9d0558806d",
+            },
+            "explicit-trace-id",
+        ),
+        ({"session-id": "019f596e-7581-7432-8f1e-674ce7d634b9"}, "fallback-trace-id"),
+    ],
+)
+def test_spend_log_session_id_uses_codex_root_session(headers: dict[str, str], expected: str):
+    session_id = _get_session_id_for_spend_log(
+        kwargs={"litellm_params": {"proxy_server_request": {"headers": headers}}},
+        standard_logging_payload=cast(StandardLoggingPayload, {"trace_id": "fallback-trace-id"}),
+    )
+
+    assert session_id == expected
 
 
 def test_sanitize_request_body_for_spend_logs_payload_basic():
