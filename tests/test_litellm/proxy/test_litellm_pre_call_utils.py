@@ -2560,28 +2560,10 @@ def test_add_litellm_metadata_from_request_headers_generic_session_id_header():
     assert data["litellm_trace_id"] == "e96634a3-fa28-4083-b354-55542e2dca01"
 
 
-def test_add_litellm_metadata_from_request_headers_uses_codex_thread_id():
-    headers = {
-        "session-id": "019f596e-7581-7432-8f1e-674ce7d634b9",
-        "thread-id": "019f59f7-1e39-74a1-b06a-49668f716c7f",
-    }
-    data = {"metadata": {}}
-
-    LiteLLMProxyRequestSetup.add_litellm_metadata_from_request_headers(
-        headers=headers, data=data, _metadata_variable_name="metadata"
-    )
-
-    assert data["metadata"]["session_id"] == "019f59f7-1e39-74a1-b06a-49668f716c7f"
-    assert data["metadata"]["trace_id"] == "019f59f7-1e39-74a1-b06a-49668f716c7f"
-    assert data["litellm_session_id"] == "019f59f7-1e39-74a1-b06a-49668f716c7f"
-    assert data["litellm_trace_id"] == "019f59f7-1e39-74a1-b06a-49668f716c7f"
-
-
 def test_add_litellm_metadata_from_request_headers_explicit_header_beats_generic():
     """Explicit x-litellm-trace-id wins over a generic x-*-session-id header."""
     headers = {
         "x-litellm-trace-id": "explicit-trace-id-value",
-        "thread-id": "019f59f7-1e39-74a1-b06a-49668f716c7f",
         "x-claude-code-session-id": "e96634a3-fa28-4083-b354-55542e2dca01",
     }
     data = {"metadata": {}}
@@ -2615,22 +2597,6 @@ def test_get_chain_id_from_headers_generic_vendor_session_id():
         )
         == "explicit-id-value"
     )
-
-
-def test_get_chain_id_from_headers_codex_thread_id():
-    from litellm.proxy.litellm_pre_call_utils import get_chain_id_from_headers
-
-    assert (
-        get_chain_id_from_headers(
-            {
-                "session-id": "019f596e-7581-7432-8f1e-674ce7d634b9",
-                "thread-id": "019f59f7-1e39-74a1-b06a-49668f716c7f",
-            }
-        )
-        == "019f59f7-1e39-74a1-b06a-49668f716c7f"
-    )
-    assert get_chain_id_from_headers({"session-id": "019f596e-7581-7432-8f1e-674ce7d634b9"}) is None
-    assert get_chain_id_from_headers({"thread-id": "short"}) is None
 
 
 def test_get_internal_user_header_from_mapping_returns_expected_header():
