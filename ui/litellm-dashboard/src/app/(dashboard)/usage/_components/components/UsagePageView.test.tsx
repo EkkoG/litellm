@@ -25,6 +25,7 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
+  topUserSpendCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
 
@@ -40,6 +41,12 @@ vi.mock("@/components/view_user_spend", () => ({
 
 vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
+}));
+
+vi.mock("./TopUserView", () => ({
+  default: ({ topUsers }: { topUsers: Array<{ user_id: string; spend: number }> }) => (
+    <div data-testid="top-users">{topUsers.map((user) => `${user.user_id}:${user.spend}`).join(",")}</div>
+  ),
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
@@ -330,6 +337,7 @@ vi.mock("@tremor/react", async () => {
 describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
+  const mockTopUserSpendCall = vi.mocked(networking.topUserSpendCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
@@ -519,8 +527,10 @@ describe("UsagePage", () => {
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
     mockUserDailyActivityCall.mockClear();
+    mockTopUserSpendCall.mockClear();
     mockTagListCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
+    mockTopUserSpendCall.mockResolvedValue([]);
     mockUseInfiniteUsers.mockReturnValue({
       data: {
         pages: [
@@ -594,6 +604,19 @@ describe("UsagePage", () => {
     // Check for chart titles (these are in the Cost tab)
     expect(screen.getByText("Daily Spend")).toBeInTheDocument();
     expect(screen.getByText("Top Virtual Keys")).toBeInTheDocument();
+  });
+
+  it("should rank users by spend in the global admin view", async () => {
+    mockTopUserSpendCall.mockResolvedValue([
+      { user_id: "user-2", user_alias: null, user_email: "bob@example.com", spend: 20 },
+      { user_id: "user-1", user_alias: "Alice", user_email: "alice@example.com", spend: 19 },
+    ]);
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    expect(await screen.findByText("Top Users")).toBeInTheDocument();
+    expect(screen.getByTestId("top-users")).toHaveTextContent("user-2:20,user-1:19");
+    expect(mockTopUserSpendCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 5);
   });
 
   it("should display the provider prompt cache hit rate for the selected time range", async () => {
@@ -942,6 +965,8 @@ describe("UsagePage", () => {
       const userSelects = screen.getAllByRole("combobox");
       const userSelect = userSelects.find((el) => el.getAttribute("placeholder") === "Select user to filter...");
       expect(userSelect).toBeUndefined();
+      expect(screen.queryByText("Top Users")).not.toBeInTheDocument();
+      expect(mockTopUserSpendCall).not.toHaveBeenCalled();
     });
 
     it("should always pass own userId for non-admin users", async () => {
@@ -969,6 +994,30 @@ describe("UsagePage", () => {
         );
       });
     });
+  });
+
+  it("should not request an unscoped user ranking for organization admins", async () => {
+    mockUseAuthorized.mockReturnValue({
+      isLoading: false,
+      isAuthorized: true,
+      token: "mock-token",
+      accessToken: "test-token",
+      userId: "org-admin-1",
+      userEmail: "org-admin@example.com",
+      userRole: "org_admin",
+      premiumUser: true,
+      disabledPersonalKeyCreation: false,
+      showSSOBanner: false,
+    });
+
+    renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+    });
+
+    expect(screen.queryByText("Top Users")).not.toBeInTheDocument();
+    expect(mockTopUserSpendCall).not.toHaveBeenCalled();
   });
 
   describe("aggregated endpoint fallback", () => {

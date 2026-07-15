@@ -2262,6 +2262,127 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch)
 
 
 @pytest.mark.asyncio
+async def test_get_top_user_spend_returns_ranked_users_with_metadata(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_top_user_spend,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock(
+        return_value=[
+            {"user_id": "user-2", "spend": 20.0},
+            {"user_id": "user-1", "spend": 12.0},
+        ]
+    )
+    mock_prisma_client.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[
+            {"user_id": "user-1", "user_alias": "Alice", "user_email": "alice@example.com"},
+            {"user_id": "user-2", "user_alias": None, "user_email": "bob@example.com"},
+        ]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    result = await get_top_user_spend(
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        limit=10,
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert [user.user_id for user in result] == ["user-2", "user-1"]
+    assert result[0].user_email == "bob@example.com"
+    assert result[1].user_alias == "Alice"
+    assert result[1].spend == 12.0
+    sql, start_date, end_date, limit = mock_prisma_client.db.query_raw.call_args.args
+    assert '"user_id" IS NOT NULL' in sql
+    assert '"user_id" <> \'\'' in sql
+    assert 'SUM(spend)::float AS spend' in sql
+    assert 'GROUP BY "user_id"' in sql
+    assert "HAVING SUM(spend) > 0" in sql
+    assert "ORDER BY spend DESC" in sql
+    assert "LIMIT $3" in sql
+    assert (start_date, end_date, limit) == ("2025-02-01", "2025-02-28", 10)
+
+
+@pytest.mark.asyncio
+async def test_get_top_user_spend_rejects_non_admin(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_top_user_spend,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_top_user_spend(
+            start_date="2025-02-01",
+            end_date="2025-02-28",
+            limit=5,
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+    assert exc_info.value.status_code == 403
+    mock_prisma_client.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_top_user_spend_rejects_missing_date_range(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_top_user_spend,
+    )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.query_raw = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_top_user_spend(
+            start_date=None,
+            end_date="2025-02-28",
+            limit=5,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {"error": "Please provide start_date and end_date"}
+    mock_prisma_client.db.query_raw.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_top_user_spend_rejects_unavailable_database(monkeypatch):
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import CommonProxyErrors
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_top_user_spend,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_top_user_spend(
+            start_date="2025-02-01",
+            end_date="2025-02-28",
+            limit=5,
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == {"error": CommonProxyErrors.db_not_connected_error.value}
+
+
+@pytest.mark.asyncio
 async def test_delete_user_cleans_up_created_by_invitation_links(mocker):
     """
     Test that delete_user removes invitation links where the deleted user is the

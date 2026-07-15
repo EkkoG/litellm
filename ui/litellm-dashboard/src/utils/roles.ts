@@ -4,6 +4,11 @@ import { Member, Team } from "@/components/networking";
 export const old_admin_roles = ["Admin", "Admin Viewer"];
 export const v2_admin_role_names = ["proxy_admin", "proxy_admin_viewer", "org_admin"];
 export const all_admin_roles = [...old_admin_roles, ...v2_admin_role_names];
+export const unscopedAdminRoles: readonly string[] = Object.freeze([
+  ...old_admin_roles,
+  "proxy_admin",
+  "proxy_admin_viewer",
+]);
 
 export const internalUserRoles = ["Internal User", "Internal Viewer", "internal_user", "internal_user_viewer"];
 export const rolesAllowedToSeeUsage = ["Admin", "Admin Viewer", "Internal User", "Internal Viewer"];

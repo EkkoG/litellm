@@ -22,6 +22,7 @@ export const getCallbackConfigsCall = async (accessToken: string) => {
  * Helper file for calls being made to proxy
  */
 import MessageManager from "@/components/molecules/message_manager";
+import type { TopUserData } from "@/components/UsagePage/types";
 import { clearTokenCookies, getCookie, storeLoginToken } from "@/utils/cookieUtils";
 import { decodeToken } from "@/utils/jwtUtils";
 import { TagNewRequest, TagUpdateRequest, TagListResponse, TagInfoResponse } from "./tag_management/types";
@@ -2537,6 +2538,22 @@ export const userDailyActivityAggregatedCall = async (
     console.error("Failed to fetch aggregated user daily activity:", error);
     throw error;
   }
+};
+
+export const topUserSpendCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  limit: number,
+): Promise<TopUserData[]> => {
+  return await apiClient.get(`/user/daily/activity/top`, {
+    accessToken,
+    query: {
+      start_date: formatDate(startTime),
+      end_date: formatDate(endTime),
+      limit: limit.toString(),
+    },
+  });
 };
 
 export const getPossibleUserRoles = async (accessToken: string) => {

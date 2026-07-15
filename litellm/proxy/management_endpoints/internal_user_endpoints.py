@@ -15,11 +15,14 @@ These are members of a Team on LiteLLM
 import asyncio
 import json
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Union, cast
+from typing import Annotated, Any, Dict, List, NoReturn, Optional, Tuple, Union, cast
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
+from pydantic import TypeAdapter
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -65,6 +68,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
+    TopUserSpend,
     UserListResponse,
     UserUpdateResult,
 )
@@ -73,6 +77,30 @@ if TYPE_CHECKING:
     from litellm.proxy.proxy_server import PrismaClient
 
 router = APIRouter()
+
+
+@dataclass(frozen=True, slots=True)
+class TopUserSpendSuccess:
+    users: Tuple[TopUserSpend, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class TopUserSpendForbidden:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class TopUserSpendDatabaseUnavailable:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class TopUserSpendMissingDateRange:
+    pass
+
+
+TopUserSpendError = Union[TopUserSpendForbidden, TopUserSpendDatabaseUnavailable, TopUserSpendMissingDateRange]
+TopUserSpendResult = Union[TopUserSpendSuccess, TopUserSpendError]
 
 
 def _hash_password_in_dict(data: dict) -> None:
@@ -2639,3 +2667,103 @@ async def get_user_daily_activity_aggregated(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {str(e)}"},
         )
+
+
+@router.get(
+    "/user/daily/activity/top",
+    tags=["Budget & Spend Tracking", "Internal User management"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=List[TopUserSpend],
+)
+@management_endpoint_wrapper
+async def get_top_user_spend(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    start_date: str | None = fastapi.Query(default=None),
+    end_date: str | None = fastapi.Query(default=None),
+    limit: int = fastapi.Query(default=5, ge=1, le=50),
+) -> List[TopUserSpend]:
+    from litellm.proxy.proxy_server import prisma_client
+
+    result = await _get_top_user_spend_result(
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        user_api_key_dict=user_api_key_dict,
+        prisma_client=prisma_client,
+    )
+    match result:
+        case TopUserSpendSuccess(users=users):
+            return list(users)
+        case (TopUserSpendForbidden() | TopUserSpendDatabaseUnavailable() | TopUserSpendMissingDateRange()) as error:
+            _raise_top_user_spend_error(error)
+        case _:
+            assert_never(result)
+
+
+async def _get_top_user_spend_result(
+    start_date: str | None,
+    end_date: str | None,
+    limit: int,
+    user_api_key_dict: UserAPIKeyAuth,
+    prisma_client: "PrismaClient | None",
+) -> TopUserSpendResult:
+    if not _user_has_admin_view(user_api_key_dict):
+        return TopUserSpendForbidden()
+    if prisma_client is None:
+        return TopUserSpendDatabaseUnavailable()
+    if start_date is None or end_date is None:
+        return TopUserSpendMissingDateRange()
+
+    rows = await prisma_client.db.query_raw(
+        """
+        SELECT "user_id", SUM(spend)::float AS spend
+        FROM "LiteLLM_DailyUserSpend"
+        WHERE date >= $1 AND date <= $2 AND "user_id" IS NOT NULL AND "user_id" <> ''
+        GROUP BY "user_id"
+        HAVING SUM(spend) > 0
+        ORDER BY spend DESC, "user_id" ASC
+        LIMIT $3
+        """,
+        start_date,
+        end_date,
+        limit,
+    )
+    ranked_users = TypeAdapter(List[TopUserSpend]).validate_python(rows or [])
+    user_ids = tuple(user.user_id for user in ranked_users)
+    users = await UserRepository(prisma_client).find_many(where={"user_id": {"in": user_ids}}) if user_ids else []
+    user_metadata = {user.user_id: user for user in users}
+
+    return TopUserSpendSuccess(
+        users=tuple(
+            ranked_user.model_copy(
+                update={
+                    "user_email": user_metadata[ranked_user.user_id].user_email,
+                    "user_alias": user_metadata[ranked_user.user_id].user_alias,
+                }
+            )
+            if ranked_user.user_id in user_metadata
+            else ranked_user
+            for ranked_user in ranked_users
+        )
+    )
+
+
+def _raise_top_user_spend_error(error: TopUserSpendError) -> NoReturn:
+    match error:
+        case TopUserSpendForbidden():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": "Only administrators can view the user spend ranking."},
+            )
+        case TopUserSpendDatabaseUnavailable():
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={"error": CommonProxyErrors.db_not_connected_error.value},
+            )
+        case TopUserSpendMissingDateRange():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={"error": "Please provide start_date and end_date"},
+            )
+        case _:
+            assert_never(error)

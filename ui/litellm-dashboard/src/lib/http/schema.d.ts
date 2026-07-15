@@ -14675,6 +14675,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/daily/activity/top": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Top User Spend */
+        get: operations["get_top_user_spend_user_daily_activity_top_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/delete": {
         parameters: {
             query?: never;
@@ -32134,6 +32151,17 @@ export interface components {
             token: string;
         } & {
             [key: string]: unknown;
+        };
+        /** TopUserSpend */
+        TopUserSpend: {
+            /** Spend */
+            spend: number;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /** TransformRequestBody */
         TransformRequestBody: {
@@ -52107,6 +52135,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_top_user_spend_user_daily_activity_top_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TopUserSpend"][];
                 };
             };
             /** @description Validation Error */
