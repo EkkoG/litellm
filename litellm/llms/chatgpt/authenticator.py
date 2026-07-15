@@ -3,6 +3,7 @@ import binascii
 import json
 import os
 import time
+from collections.abc import Mapping
 from typing import Any, Optional
 
 import httpx
@@ -63,6 +64,27 @@ class Authenticator:
         id_token = auth_data.get("id_token")
         return self._extract_account_id(id_token or auth_data.get("access_token"))
 
+    def get_plan_type(
+        self,
+        litellm_params: Mapping[str, object] | None = None,
+        access_token: str | None = None,
+    ) -> str | None:
+        params = litellm_params or {}
+        plan_type = params.get("chatgpt_plan_type") or params.get("plan_type")
+        if isinstance(plan_type, str) and plan_type:
+            return plan_type
+        id_token = params.get("chatgpt_id_token") or params.get("id_token")
+        stored_access_token = params.get("api_key") or params.get("chatgpt_access_token")
+        token = next(
+            (
+                candidate
+                for candidate in (id_token, access_token, stored_access_token)
+                if isinstance(candidate, str) and candidate
+            ),
+            None,
+        )
+        return self._extract_plan_type(token)
+
     def request_device_code(self) -> dict[str, str]:
         return self._request_device_code()
 
@@ -80,6 +102,7 @@ class Authenticator:
             "id_token": params.get("chatgpt_id_token") or params.get("id_token"),
             "expires_at": params.get("chatgpt_expires_at") or params.get("expires_at"),
             "account_id": params.get("chatgpt_account_id") or params.get("account_id"),
+            "plan_type": params.get("chatgpt_plan_type") or params.get("plan_type"),
         }
 
     def _coerce_params(self, litellm_params: Optional[Any]) -> dict[str, Any]:
@@ -127,6 +150,17 @@ class Authenticator:
             account_id = auth_claims.get("chatgpt_account_id")
             if isinstance(account_id, str) and account_id:
                 return account_id
+        return None
+
+    def _extract_plan_type(self, token: str | None) -> str | None:
+        if not token:
+            return None
+        claims = self._decode_jwt_claims(token)
+        auth_claims = claims.get("https://api.openai.com/auth")
+        if isinstance(auth_claims, dict):
+            plan_type = auth_claims.get("chatgpt_plan_type")
+            if isinstance(plan_type, str) and plan_type:
+                return plan_type
         return None
 
     def _request_device_code(self) -> dict[str, str]:
@@ -301,10 +335,12 @@ class Authenticator:
         id_token = tokens.get("id_token")
         expires_at = self._get_expires_at(access_token) if access_token else None
         account_id = self._extract_account_id(id_token or access_token)
+        plan_type = self._extract_plan_type(id_token or access_token)
         return {
             "access_token": access_token,
             "refresh_token": tokens.get("refresh_token"),
             "id_token": id_token,
             "expires_at": expires_at,
             "account_id": account_id,
+            "plan_type": plan_type,
         }

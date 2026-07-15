@@ -8,11 +8,13 @@ from typing import Literal
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from litellm.llms.chatgpt.authenticator import Authenticator
 from litellm.types.utils import CredentialItem
 
 CHATGPT_SUBSCRIPTION_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage"
 CHATGPT_RATE_LIMIT_RESET_CREDITS_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 CHATGPT_CONSUME_RATE_LIMIT_RESET_CREDIT_URL = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY = "chatgpt_daily_quota_snapshot"
 
 CredentialStatus = Literal["valid", "expired"]
 ChatGPTResetCreditConsumeOutcome = Literal["reset", "nothing_to_reset", "no_credit", "already_redeemed"]
@@ -20,8 +22,15 @@ ChatGPTResetCreditConsumeOutcome = Literal["reset", "nothing_to_reset", "no_cred
 
 class ChatGPTSubscriptionTier(BaseModel):
     name: str
-    utilization: float
+    remaining_percent: float
     resets_at: str | None = None
+
+
+class ChatGPTDailyQuotaSnapshot(BaseModel):
+    date: str
+    timezone: str
+    captured_at: str
+    tiers: list[ChatGPTSubscriptionTier]
 
 
 class ChatGPTSubscriptionStatus(BaseModel):
@@ -31,6 +40,7 @@ class ChatGPTSubscriptionStatus(BaseModel):
     tiers: list[ChatGPTSubscriptionTier]
     rate_limit_reset_credits: ChatGPTRateLimitResetCredits | None = None
     plan_label: str | None = None
+    daily_snapshot: ChatGPTDailyQuotaSnapshot | None = None
     error: str | None = None
     queried_at: int
 
@@ -107,10 +117,30 @@ def get_chatgpt_account_id(credential_values: Mapping[str, object]) -> str | Non
     return account_id if isinstance(account_id, str) and account_id else None
 
 
+def get_chatgpt_plan_label(credential_values: Mapping[str, object]) -> str | None:
+    return _normalize_plan_label(Authenticator().get_plan_type(credential_values))
+
+
+def get_chatgpt_daily_quota_snapshot(
+    credential_info: object,
+) -> ChatGPTDailyQuotaSnapshot | None:
+    if not isinstance(credential_info, Mapping):
+        return None
+    raw_snapshot = credential_info.get(CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY)
+    if raw_snapshot is None:
+        return None
+    try:
+        return ChatGPTDailyQuotaSnapshot.model_validate(raw_snapshot)
+    except ValidationError:
+        return None
+
+
 def parse_chatgpt_subscription_usage(
     credential_name: str,
     body: Mapping[str, object],
     reset_credits: ChatGPTRateLimitResetCredits | None = None,
+    plan_label: str | None = None,
+    daily_snapshot: ChatGPTDailyQuotaSnapshot | None = None,
 ) -> ChatGPTSubscriptionStatus:
     usage = ChatGPTUsageResponse.model_validate(body)
     tiers = _parse_rate_limit_tiers(usage.rate_limit)
@@ -120,10 +150,14 @@ def parse_chatgpt_subscription_usage(
         credential_status="valid",
         tiers=tiers,
         rate_limit_reset_credits=reset_credits or usage.rate_limit_reset_credits,
-        plan_label=_first_present_string(
-            body,
-            ("plan_label", "planLabel", "plan", "plan_type", "subscription_plan", "account_plan"),
+        plan_label=_normalize_plan_label(
+            plan_label
+            or _first_present_string(
+                body,
+                ("plan_label", "planLabel", "plan", "plan_type", "subscription_plan", "account_plan"),
+            )
         ),
+        daily_snapshot=daily_snapshot,
         error=None,
         queried_at=_now_millis(),
     )
@@ -135,6 +169,9 @@ async def query_chatgpt_subscription_status(
     account_id: str | None,
     fetcher: ChatGPTUsageFetcher | None = None,
     reset_credits_fetcher: ChatGPTResetCreditsFetcher | None = None,
+    plan_label: str | None = None,
+    daily_snapshot: ChatGPTDailyQuotaSnapshot | None = None,
+    include_reset_credits: bool = True,
 ) -> ChatGPTSubscriptionStatus:
     response = await (fetcher or _fetch_chatgpt_usage)(access_token, account_id)
     if response.status_code in (401, 403):
@@ -166,11 +203,17 @@ async def query_chatgpt_subscription_status(
     return parse_chatgpt_subscription_usage(
         credential_name,
         data,
-        reset_credits=await _query_chatgpt_rate_limit_reset_credits(
-            access_token=access_token,
-            account_id=account_id,
-            fetcher=reset_credits_fetcher,
+        reset_credits=(
+            await _query_chatgpt_rate_limit_reset_credits(
+                access_token=access_token,
+                account_id=account_id,
+                fetcher=reset_credits_fetcher,
+            )
+            if include_reset_credits
+            else None
         ),
+        plan_label=plan_label,
+        daily_snapshot=daily_snapshot,
     )
 
 
@@ -310,7 +353,7 @@ def _tier_from_window(window: ChatGPTUsageWindow | None) -> ChatGPTSubscriptionT
         return None
     return ChatGPTSubscriptionTier(
         name=_window_seconds_to_tier_name(window.limit_window_seconds),
-        utilization=window.used_percent,
+        remaining_percent=max(0.0, min(100.0, 100.0 - window.used_percent)),
         resets_at=_unix_seconds_to_iso(window.reset_at),
     )
 
@@ -344,6 +387,15 @@ def _first_present_string(body: Mapping[str, object], keys: tuple[str, ...]) -> 
     return None
 
 
+def _normalize_plan_label(plan_type: str | None) -> str | None:
+    if plan_type is None:
+        return None
+    normalized = plan_type.strip().lower()
+    without_prefix = normalized.removeprefix("chatgpt_").removeprefix("chatgpt-")
+    words = tuple(word for word in without_prefix.replace("-", "_").split("_") if word)
+    return " ".join(word.capitalize() for word in words) or None
+
+
 def _error_status(
     credential_name: str,
     credential_status: CredentialStatus,
@@ -356,6 +408,7 @@ def _error_status(
         tiers=[],
         rate_limit_reset_credits=None,
         plan_label=None,
+        daily_snapshot=None,
         error=error,
         queried_at=_now_millis(),
     )

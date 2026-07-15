@@ -790,6 +790,28 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_initialize_chatgpt_daily_quota_snapshot_job_without_database():
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.credential_endpoints.chatgpt_daily_quota_snapshot import (
+        CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID,
+    )
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    scheduler_factory = MagicMock(return_value=AsyncIOScheduler())
+    active_scheduler = ProxyStartupEvent.initialize_chatgpt_daily_quota_snapshot_job(
+        prisma_client=None,
+        snapshot_scheduler=None,
+        scheduler_factory=scheduler_factory,
+    )
+
+    scheduler_factory.assert_called_once_with()
+    assert active_scheduler.running
+    assert active_scheduler.get_job(CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID) is not None
+    active_scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_false(monkeypatch):
     """
     Regression (LIT-4128): MCP servers created via the UI are persisted to the DB

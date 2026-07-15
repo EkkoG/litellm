@@ -51,11 +51,14 @@ const isChatGPTCredential = (credential: CredentialItem): boolean =>
 
 const tierLabel = (name: string): string => CHATGPT_TIER_LABELS[name] || name.replace(/_/g, " ");
 
-const tierColor = (utilization: number): "green" | "yellow" | "red" => {
-  if (utilization >= 90) return "red";
-  if (utilization >= 70) return "yellow";
+const tierColor = (remainingPercent: number): "green" | "yellow" | "red" => {
+  if (remainingPercent <= 10) return "red";
+  if (remainingPercent <= 30) return "yellow";
   return "green";
 };
+
+const formatQuotaPercent = (remainingPercent: number): string =>
+  new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(remainingPercent);
 
 const formatResetCountdown = (resetsAt?: string | null): string | null => {
   if (!resetsAt) {
@@ -78,7 +81,7 @@ const formatResetCountdown = (resetsAt?: string | null): string | null => {
 
 const statusLabel = (status: ChatGPTSubscriptionStatus): string => {
   if (status.success) {
-    return status.plan_label || "ChatGPT";
+    return status.plan_label || "Unknown plan";
   }
   if (status.credential_status === "expired") {
     return "Sign in required";
@@ -251,11 +254,20 @@ const ChatGPTSubscriptionStatusCell: React.FC<{
       {status.tiers.map((tier) => {
         const countdown = formatResetCountdown(tier.resets_at);
         return (
-          <Badge key={tier.name} color={tierColor(tier.utilization)} size="xs">
-            {tierLabel(tier.name)} {Math.round(tier.utilization)}%{countdown ? ` · ${countdown}` : ""}
+          <Badge key={tier.name} color={tierColor(tier.remaining_percent)} size="xs">
+            {tierLabel(tier.name)} {formatQuotaPercent(tier.remaining_percent)}% remaining
+            {countdown ? ` · ${countdown}` : ""}
           </Badge>
         );
       })}
+      {status.daily_snapshot && (
+        <Text className="basis-full text-xs text-gray-500">
+          Daily start {status.daily_snapshot.date} ({status.daily_snapshot.timezone}):{" "}
+          {status.daily_snapshot.tiers
+            .map((tier) => `${tierLabel(tier.name)} ${formatQuotaPercent(tier.remaining_percent)}%`)
+            .join(" · ")}
+        </Text>
+      )}
       {accessToken && (
         <ChatGPTResetCreditsList
           credential={credential}

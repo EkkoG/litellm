@@ -301,8 +301,15 @@ export interface CredentialsResponse {
 
 export interface ChatGPTSubscriptionTier {
   name: string;
-  utilization: number;
+  remaining_percent: number;
   resets_at?: string | null;
+}
+
+export interface ChatGPTDailyQuotaSnapshot {
+  date: string;
+  timezone: string;
+  captured_at: string;
+  tiers: ChatGPTSubscriptionTier[];
 }
 
 export interface ChatGPTRateLimitResetCredit {
@@ -327,6 +334,7 @@ export interface ChatGPTSubscriptionStatus {
   tiers: ChatGPTSubscriptionTier[];
   rate_limit_reset_credits?: ChatGPTRateLimitResetCredits | null;
   plan_label?: string | null;
+  daily_snapshot?: ChatGPTDailyQuotaSnapshot | null;
   error?: string | null;
   queried_at: number;
 }

@@ -18,6 +18,7 @@ def build_chatgpt_credential_values(tokens: dict[str, str], api_base: Optional[s
         "chatgpt_refresh_token": auth_record.get("refresh_token"),
         "chatgpt_id_token": auth_record.get("id_token"),
         "chatgpt_account_id": auth_record.get("account_id"),
+        "chatgpt_plan_type": auth_record.get("plan_type"),
         "chatgpt_expires_at": str(auth_record["expires_at"]) if auth_record.get("expires_at") is not None else None,
         "api_base": api_base,
     }
