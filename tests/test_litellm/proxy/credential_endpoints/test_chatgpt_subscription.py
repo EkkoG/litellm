@@ -53,6 +53,32 @@ def test_parse_chatgpt_subscription_usage_maps_known_windows():
     assert status.rate_limit_reset_credits.available_count == 2
 
 
+@pytest.mark.parametrize(
+    ("subscription_plan", "expected_label"),
+    (("chatgptprolite", "Pro (5x)"), ("chatgptpro", "Pro (20x)")),
+)
+def test_parse_chatgpt_subscription_usage_prefers_live_subscription_plan(
+    subscription_plan: str, expected_label: str
+):
+    status = parse_chatgpt_subscription_usage(
+        "chatgpt-admin",
+        {"plan": "prolite", "subscription_plan": subscription_plan, "rate_limit": {}},
+        plan_label="Pro",
+    )
+
+    assert status.plan_label == expected_label
+
+
+def test_parse_chatgpt_subscription_usage_does_not_infer_variant_from_legacy_plan():
+    status = parse_chatgpt_subscription_usage(
+        "chatgpt-admin",
+        {"plan": "chatgptprolite", "rate_limit": {}},
+        plan_label="Pro",
+    )
+
+    assert status.plan_label == "Pro"
+
+
 @pytest.mark.asyncio
 async def test_query_chatgpt_subscription_status_uses_reset_credit_details():
     async def usage_fetcher(access_token: str, account_id: str | None) -> httpx.Response:
@@ -158,8 +184,24 @@ def test_chatgpt_token_helpers_accept_api_key_and_account_id():
     assert get_chatgpt_account_id(credential_values) == "account-id"
 
 
-def test_get_chatgpt_plan_label_normalizes_token_plan_type():
-    assert get_chatgpt_plan_label({"chatgpt_plan_type": "chatgpt_pro"}) == "Pro"
+@pytest.mark.parametrize(
+    ("plan_type", "expected_label"),
+    (
+        ("free", "Free"),
+        ("chatgptfreeplan", "Free"),
+        ("go", "Go"),
+        ("chatgptgoplan", "Go"),
+        ("plus", "Plus"),
+        ("chatgptplusplan", "Plus"),
+        ("prolite", "Pro"),
+        ("pro", "Pro"),
+        ("chatgpt_pro", "Pro"),
+        ("chatgptprolite", "Pro"),
+        ("chatgptpro", "Pro"),
+    ),
+)
+def test_get_chatgpt_plan_label_normalizes_token_plan_type(plan_type: str, expected_label: str):
+    assert get_chatgpt_plan_label({"chatgpt_plan_type": plan_type}) == expected_label
 
 
 @pytest.mark.asyncio

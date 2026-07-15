@@ -144,18 +144,21 @@ def parse_chatgpt_subscription_usage(
 ) -> ChatGPTSubscriptionStatus:
     usage = ChatGPTUsageResponse.model_validate(body)
     tiers = _parse_rate_limit_tiers(usage.rate_limit)
+    subscription_plan = _first_present_string(body, ("subscription_plan",))
+    fallback_plan_type = _first_present_string(
+        body,
+        ("plan_label", "planLabel", "plan", "plan_type", "account_plan"),
+    )
     return ChatGPTSubscriptionStatus(
         credential_name=credential_name,
         success=True,
         credential_status="valid",
         tiers=tiers,
         rate_limit_reset_credits=reset_credits or usage.rate_limit_reset_credits,
-        plan_label=_normalize_plan_label(
-            plan_label
-            or _first_present_string(
-                body,
-                ("plan_label", "planLabel", "plan", "plan_type", "subscription_plan", "account_plan"),
-            )
+        plan_label=(
+            _normalize_plan_label(subscription_plan, include_quota_variant=True)
+            if subscription_plan is not None
+            else _normalize_plan_label(fallback_plan_type or plan_label)
         ),
         daily_snapshot=daily_snapshot,
         error=None,
@@ -387,11 +390,37 @@ def _first_present_string(body: Mapping[str, object], keys: tuple[str, ...]) -> 
     return None
 
 
-def _normalize_plan_label(plan_type: str | None) -> str | None:
+def _normalize_plan_label(plan_type: str | None, include_quota_variant: bool = False) -> str | None:
     if plan_type is None:
         return None
     normalized = plan_type.strip().lower()
+    match normalized:
+        case "chatgptfreeplan":
+            return "Free"
+        case "chatgptgoplan":
+            return "Go"
+        case "chatgptplusplan":
+            return "Plus"
+        case "chatgptprolite" if include_quota_variant:
+            return "Pro (5x)"
+        case "chatgptpro" if include_quota_variant:
+            return "Pro (20x)"
+        case "chatgptprolite" | "chatgptpro":
+            return "Pro"
+        case _:
+            pass
     without_prefix = normalized.removeprefix("chatgpt_").removeprefix("chatgpt-")
+    match without_prefix:
+        case "free":
+            return "Free"
+        case "go":
+            return "Go"
+        case "plus":
+            return "Plus"
+        case "pro" | "prolite" | "pro_lite":
+            return "Pro"
+        case _:
+            pass
     words = tuple(word for word in without_prefix.replace("-", "_").split("_") if word)
     return " ".join(word.capitalize() for word in words) or None
 
