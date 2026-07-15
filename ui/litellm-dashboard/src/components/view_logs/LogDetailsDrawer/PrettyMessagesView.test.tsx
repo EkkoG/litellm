@@ -38,6 +38,45 @@ describe("PrettyMessagesView", () => {
     expect(screen.getByText("A quiet moment.")).toBeInTheDocument();
   });
 
+  it("renders Responses API input and output text", () => {
+    const request = {
+      input: [
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "Review the change." }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Check this patch." }],
+        },
+      ],
+    };
+    const response = {
+      output: [
+        { type: "reasoning", summary: [], content: [] },
+        {
+          type: "function_call",
+          call_id: "call_123",
+          name: "inspect_repo",
+          arguments: '{"path":"src"}',
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "No issues found." }],
+        },
+      ],
+    };
+
+    render(<PrettyMessagesView request={request} response={response} />);
+    expect(screen.getByText("Review the change.")).toBeInTheDocument();
+    expect(screen.getByText("Check this patch.")).toBeInTheDocument();
+    expect(screen.getByText("No issues found.")).toBeInTheDocument();
+    expect(screen.getByText("inspect_repo")).toBeInTheDocument();
+  });
+
   it("should render the realtime pretty view for realtime API responses", () => {
     const request = {};
     const response = {
