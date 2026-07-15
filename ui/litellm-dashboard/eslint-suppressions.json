@@ -2411,11 +2411,6 @@
       "count": 2
     }
   },
-  "src/components/view_logs/LogDetailsDrawer/prettyMessagesUtils.ts": {
-    "no-nested-ternary": {
-      "count": 1
-    }
-  },
   "src/components/view_logs/LogDetailsDrawer/useKeyboardNavigation.ts": {
     "react-hooks/immutability": {
       "count": 2
