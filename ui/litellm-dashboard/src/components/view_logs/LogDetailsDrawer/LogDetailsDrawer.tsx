@@ -27,7 +27,7 @@ export interface LogDetailsDrawerProps {
   startTime?: string;
 }
 
-const SIDEBAR_WIDTH_PX = 224;
+const SIDEBAR_WIDTH_PX = 280;
 
 // Session logs are fetched page-by-page from the paginated backend and
 // accumulated so the drawer can show the whole session. page_size is the
