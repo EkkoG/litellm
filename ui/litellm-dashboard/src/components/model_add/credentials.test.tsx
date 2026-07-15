@@ -101,11 +101,20 @@ describe("CredentialsPanel", () => {
       credential_name: "chatgpt-admin",
       success: true,
       credential_status: "valid",
-      plan_label: "Plus",
+      plan_label: "Pro",
       tiers: [
-        { name: "five_hour", utilization: 25, resets_at: null },
-        { name: "seven_day", utilization: 10, resets_at: null },
+        { name: "five_hour", remaining_percent: 74.94, resets_at: null },
+        { name: "seven_day", remaining_percent: 90, resets_at: null },
       ],
+      daily_snapshot: {
+        date: "2026-07-15",
+        timezone: "UTC",
+        captured_at: "2026-07-15T00:00:00Z",
+        tiers: [
+          { name: "five_hour", remaining_percent: 80.5, resets_at: null },
+          { name: "seven_day", remaining_percent: 92, resets_at: null },
+        ],
+      },
       rate_limit_reset_credits: null,
       error: null,
       queried_at: Date.now(),
@@ -125,10 +134,11 @@ describe("CredentialsPanel", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByText("Plus")).toBeInTheDocument();
+      expect(screen.getByText("Pro")).toBeInTheDocument();
     });
-    expect(screen.getByText("5h 25%")).toBeInTheDocument();
-    expect(screen.getByText("7d 10%")).toBeInTheDocument();
+    expect(screen.getByText("5h 74.9% remaining")).toBeInTheDocument();
+    expect(screen.getByText("7d 90% remaining")).toBeInTheDocument();
+    expect(screen.getByText("Daily start 2026-07-15 (UTC): 5h 80.5% · 7d 92%")).toBeInTheDocument();
     expect(mockChatGPTSubscriptionStatusCall).toHaveBeenCalledWith("test-token", "chatgpt-admin");
   });
 

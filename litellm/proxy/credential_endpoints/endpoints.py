@@ -15,21 +15,24 @@ from litellm.llms.chatgpt.device_authorization import ChatGPTDeviceAuthorization
 from litellm.llms.github_copilot.device_authorization import GitHubCopilotDeviceAuthorizationProvider
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.credential_endpoints.credential_writer import (
-    CredentialConflict,
-    CredentialNotFound,
-    CredentialWriter,
-)
 from litellm.proxy.credential_endpoints.chatgpt_credential_utils import refresh_chatgpt_credential_if_needed
 from litellm.proxy.credential_endpoints.chatgpt_subscription import (
+    ChatGPTDailyQuotaSnapshot,
     ChatGPTResetCreditConsumeRequest,
     ChatGPTResetCreditConsumeResponse,
     ChatGPTSubscriptionStatus,
     consume_chatgpt_rate_limit_reset_credit,
     get_chatgpt_access_token,
     get_chatgpt_account_id,
+    get_chatgpt_daily_quota_snapshot,
+    get_chatgpt_plan_label,
     is_chatgpt_credential,
     query_chatgpt_subscription_status,
+)
+from litellm.proxy.credential_endpoints.credential_writer import (
+    CredentialConflict,
+    CredentialNotFound,
+    CredentialWriter,
 )
 from litellm.proxy.credential_endpoints.device_login_flow import (
     DeviceLoginFailed,
@@ -65,6 +68,8 @@ class ChatGPTCredentialAuth(BaseModel):
     credential_name: str
     access_token: str
     account_id: str | None = None
+    plan_label: str | None = None
+    daily_snapshot: ChatGPTDailyQuotaSnapshot | None = None
 
 
 @router.post(
@@ -412,6 +417,8 @@ async def get_chatgpt_credential_subscription(
             credential_name=auth.credential_name,
             access_token=auth.access_token,
             account_id=auth.account_id,
+            plan_label=auth.plan_label,
+            daily_snapshot=auth.daily_snapshot,
         )
     except Exception as e:
         verbose_proxy_logger.exception(e)
@@ -476,6 +483,8 @@ def _get_chatgpt_credential_auth(
         credential_name=credential.credential_name,
         access_token=access_token,
         account_id=get_chatgpt_account_id(credential_values),
+        plan_label=get_chatgpt_plan_label(credential_values),
+        daily_snapshot=get_chatgpt_daily_quota_snapshot(credential.credential_info or {}),
     )
 
 

@@ -7,10 +7,14 @@ import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.credential_endpoints import endpoints
 from litellm.proxy.credential_endpoints.chatgpt_subscription import (
+    CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY,
+    ChatGPTDailyQuotaSnapshot,
     ChatGPTResetCreditConsumeRequest,
+    ChatGPTSubscriptionTier,
     consume_chatgpt_rate_limit_reset_credit,
     get_chatgpt_access_token,
     get_chatgpt_account_id,
+    get_chatgpt_plan_label,
     parse_chatgpt_subscription_usage,
     query_chatgpt_subscription_status,
 )
@@ -40,9 +44,9 @@ def test_parse_chatgpt_subscription_usage_maps_known_windows():
 
     assert status.success is True
     assert status.plan_label == "Plus"
-    assert [(tier.name, tier.utilization) for tier in status.tiers] == [
-        ("five_hour", 42.5),
-        ("seven_day", 9),
+    assert [(tier.name, tier.remaining_percent) for tier in status.tiers] == [
+        ("five_hour", 57.5),
+        ("seven_day", 91),
     ]
     assert status.tiers[0].resets_at == "2023-11-14T22:13:20Z"
     assert status.rate_limit_reset_credits is not None
@@ -154,12 +158,24 @@ def test_chatgpt_token_helpers_accept_api_key_and_account_id():
     assert get_chatgpt_account_id(credential_values) == "account-id"
 
 
+def test_get_chatgpt_plan_label_normalizes_token_plan_type():
+    assert get_chatgpt_plan_label({"chatgpt_plan_type": "chatgpt_pro"}) == "Pro"
+
+
 @pytest.mark.asyncio
 async def test_get_chatgpt_credential_subscription_uses_refreshed_values(monkeypatch):
     credential = CredentialItem(
         credential_name="chatgpt-admin",
         credential_values={"api_key": "old-token"},
-        credential_info={"custom_llm_provider": "chatgpt"},
+        credential_info={
+            "custom_llm_provider": "chatgpt",
+            CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY: {
+                "date": "2026-07-15",
+                "timezone": "UTC",
+                "captured_at": "2026-07-15T00:00:00Z",
+                "tiers": [{"name": "seven_day", "remaining_percent": 88.5}],
+            },
+        },
     )
     monkeypatch.setattr(litellm, "credential_list", [credential])
     monkeypatch.setattr(
@@ -168,6 +184,7 @@ async def test_get_chatgpt_credential_subscription_uses_refreshed_values(monkeyp
         lambda credential, user_id: {
             "api_key": "new-token",
             "chatgpt_account_id": "account-id",
+            "chatgpt_plan_type": "pro",
         },
     )
     query = AsyncMock(
@@ -196,6 +213,13 @@ async def test_get_chatgpt_credential_subscription_uses_refreshed_values(monkeyp
         credential_name="chatgpt-admin",
         access_token="new-token",
         account_id="account-id",
+        plan_label="Pro",
+        daily_snapshot=ChatGPTDailyQuotaSnapshot(
+            date="2026-07-15",
+            timezone="UTC",
+            captured_at="2026-07-15T00:00:00Z",
+            tiers=[ChatGPTSubscriptionTier(name="seven_day", remaining_percent=88.5)],
+        ),
     )
 
 

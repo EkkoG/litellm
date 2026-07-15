@@ -22297,6 +22297,17 @@ export interface components {
             /** Url */
             url: string;
         };
+        /** ChatGPTDailyQuotaSnapshot */
+        ChatGPTDailyQuotaSnapshot: {
+            /** Captured At */
+            captured_at: string;
+            /** Date */
+            date: string;
+            /** Tiers */
+            tiers: components["schemas"]["ChatGPTSubscriptionTier"][];
+            /** Timezone */
+            timezone: string;
+        };
         /** ChatGPTDeviceLoginPollRequest */
         ChatGPTDeviceLoginPollRequest: {
             /** Login Id */
@@ -22377,6 +22388,7 @@ export interface components {
              * @enum {string}
              */
             credential_status: "valid" | "expired";
+            daily_snapshot?: components["schemas"]["ChatGPTDailyQuotaSnapshot"] | null;
             /** Error */
             error?: string | null;
             /** Plan Label */
@@ -22393,10 +22405,10 @@ export interface components {
         ChatGPTSubscriptionTier: {
             /** Name */
             name: string;
+            /** Remaining Percent */
+            remaining_percent: number;
             /** Resets At */
             resets_at?: string | null;
-            /** Utilization */
-            utilization: number;
         };
         /** ChatMessage */
         ChatMessage: {

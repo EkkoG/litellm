@@ -64,3 +64,14 @@ class TestChatGPTAuthenticator:
         )
 
         assert account_id == "acct-123"
+
+    def test_get_plan_type_from_id_token(self, authenticator: Authenticator):
+        id_token = _make_jwt({"https://api.openai.com/auth": {"chatgpt_plan_type": "pro"}})
+
+        plan_type = authenticator.get_plan_type(
+            {
+                "chatgpt_id_token": id_token,
+            }
+        )
+
+        assert plan_type == "pro"

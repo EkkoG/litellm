@@ -857,7 +857,8 @@ async def proxy_startup_event(app: FastAPI):
         premium_user, \
         _license_check, \
         proxy_batch_polling_interval, \
-        shared_aiohttp_session
+        shared_aiohttp_session, \
+        scheduler
     import json
 
     init_verbose_loggers()
@@ -1065,6 +1066,12 @@ async def proxy_startup_event(app: FastAPI):
 
         ## SYNC UI SETTINGS ##
         await ProxyStartupEvent._sync_ui_settings_to_general_settings()
+
+    scheduler = ProxyStartupEvent.initialize_chatgpt_daily_quota_snapshot_job(
+        prisma_client=prisma_client,
+        snapshot_scheduler=scheduler,
+        scheduler_factory=AsyncIOScheduler,
+    )
 
     # Start background health checks AFTER models are loaded and index is built
     if use_background_health_checks:
@@ -7764,6 +7771,26 @@ class ProxyStartupEvent:
                     )
         except Exception as e:
             verbose_proxy_logger.debug("UI settings sync on startup skipped or failed: %s", e)
+
+    @classmethod
+    def initialize_chatgpt_daily_quota_snapshot_job(
+        cls,
+        prisma_client: PrismaClient | None,
+        snapshot_scheduler: AsyncIOScheduler | None,
+        scheduler_factory: Callable[[], AsyncIOScheduler],
+    ) -> AsyncIOScheduler:
+        from litellm.proxy.credential_endpoints.chatgpt_daily_quota_snapshot import (
+            schedule_chatgpt_daily_quota_snapshot_job,
+        )
+
+        chatgpt_snapshot_scheduler = snapshot_scheduler or scheduler_factory()
+        schedule_chatgpt_daily_quota_snapshot_job(
+            scheduler=chatgpt_snapshot_scheduler,
+            repository=CredentialsRepository(prisma_client) if prisma_client is not None else None,
+        )
+        if not chatgpt_snapshot_scheduler.running:
+            chatgpt_snapshot_scheduler.start(paused=False)
+        return chatgpt_snapshot_scheduler
 
     @classmethod
     async def initialize_scheduled_background_jobs(
