@@ -22,6 +22,13 @@ class UserListResponse(BaseModel):
     total_pages: int
 
 
+class TopUserSpend(BaseModel):
+    user_id: str
+    user_email: Optional[str] = None
+    user_alias: Optional[str] = None
+    spend: float
+
+
 class BulkUpdateUserRequest(BaseModel):
     """Request for bulk user updates"""
 

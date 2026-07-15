@@ -100,6 +100,13 @@ export interface EntityMetricWithMetadata {
   metadata: EntityMetadata;
 }
 
+export interface TopUserData {
+  user_id: string;
+  user_alias: string | null;
+  user_email: string | null;
+  spend: number;
+}
+
 export interface TagUsage {
   tag: string;
   usage: number;

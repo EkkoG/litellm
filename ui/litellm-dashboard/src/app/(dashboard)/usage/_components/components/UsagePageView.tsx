@@ -8,6 +8,7 @@
 
 import { DownOutlined, ExportOutlined, InfoCircleOutlined, LoadingOutlined, RightOutlined } from "@ant-design/icons";
 import { useDebouncedState } from "@tanstack/react-pacer/debouncer";
+import { useQuery } from "@tanstack/react-query";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import {
   Card,
@@ -34,7 +35,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { all_admin_roles, internalUserRoles, unscopedAdminRoles } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
@@ -42,6 +43,7 @@ import { Team } from "@/components/key_team_helpers/key_list";
 import {
   Organization,
   tagListCall,
+  topUserSpendCall,
   userDailyActivityAggregatedCall,
   userDailyActivityCall,
 } from "@/components/networking";
@@ -51,7 +53,7 @@ import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
-import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
+import { DailyData, KeyMetricWithMetadata, MetricWithMetadata, TopUserData } from "@/components/UsagePage/types";
 import { formatPromptCacheHitRate, valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import { DailySpendTable } from "./DailySpendTable";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
@@ -60,6 +62,7 @@ import SpendByProvider from "./EntityUsage/SpendByProvider";
 import TopKeyView from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import UsageAIChatPanel from "./UsageAIChatPanel";
 import { UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import TopUserView from "./TopUserView";
 
 interface UsagePageProps {
   teams: Team[];
@@ -151,6 +154,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [usageView, setUsageView] = useState<UsageOption>("global");
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
+  const [topUsersLimit, setTopUsersLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
@@ -162,9 +166,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
+  const showTopUsers = unscopedAdminRoles.includes(userRole || "") && usageView === "global" && selectedUserId === null;
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
+  const { data: topUsers = [], isFetching: topUsersLoading } = useQuery<TopUserData[]>({
+    queryKey: ["top-user-spend", userID, startTime?.getTime(), endTime?.getTime(), topUsersLimit],
+    queryFn: () => {
+      if (!accessToken || !startTime || !endTime) {
+        return Promise.resolve([]);
+      }
+      return topUserSpendCall(accessToken, startTime, endTime, topUsersLimit);
+    },
+    enabled: showTopUsers && Boolean(accessToken && startTime && endTime),
+  });
 
   useEffect(() => {
     if (!accessToken) return;
@@ -739,6 +754,22 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                           </CardContent>
                         </ShadcnCard>
                       </Col>
+                      {showTopUsers && (
+                        <Col numColSpan={1}>
+                          <Card className="h-full">
+                            <Title>Top Users</Title>
+                            {topUsersLoading ? (
+                              <ChartLoader isDateChanging={isDateChanging} />
+                            ) : (
+                              <TopUserView
+                                topUsers={topUsers}
+                                topUsersLimit={topUsersLimit}
+                                setTopUsersLimit={setTopUsersLimit}
+                              />
+                            )}
+                          </Card>
+                        </Col>
+                      )}
                       {/* Top API Keys */}
                       <Col numColSpan={1}>
                         <Card className="h-full">
@@ -753,7 +784,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       </Col>
 
                       {/* Top Models */}
-                      <Col numColSpan={1}>
+                      <Col numColSpan={showTopUsers ? 2 : 1}>
                         <Card className="h-full">
                           <Title>{modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models"}</Title>
                           <div className="flex justify-between items-center mb-4">
