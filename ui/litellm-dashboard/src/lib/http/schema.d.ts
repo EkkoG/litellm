@@ -2678,6 +2678,23 @@ export interface paths {
         patch: operations["update_credential_credentials__credential_name__patch"];
         trace?: never;
     };
+    "/credentials/{credential_name}/chatgpt/quota-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Chatgpt Credential Quota History */
+        get: operations["get_chatgpt_credential_quota_history_credentials__credential_name__chatgpt_quota_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/{credential_name}/chatgpt/rate-limit-reset-credits/consume": {
         parameters: {
             query?: never;
@@ -22320,6 +22337,22 @@ export interface components {
              */
             overwrite_existing: boolean;
         };
+        /** ChatGPTQuotaHistoryResponse */
+        ChatGPTQuotaHistoryResponse: {
+            /** Credential Name */
+            credential_name: string;
+            /** Current Date */
+            current_date: string;
+            /**
+             * Days
+             * @enum {integer}
+             */
+            days: 7 | 30 | 90;
+            /** Snapshots */
+            snapshots: components["schemas"]["ChatGPTDailyQuotaSnapshot"][];
+            /** Timezone */
+            timezone: string;
+        };
         /** ChatGPTRateLimitResetCredit */
         ChatGPTRateLimitResetCredit: {
             /** Description */
@@ -38340,6 +38373,40 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_chatgpt_credential_quota_history_credentials__credential_name__chatgpt_quota_history_get: {
+        parameters: {
+            query?: {
+                days?: 7 | 30 | 90;
+            };
+            header?: never;
+            path: {
+                /** @description The ChatGPT credential name, percent-decoded; may contain slashes */
+                credential_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatGPTQuotaHistoryResponse"];
                 };
             };
             /** @description Validation Error */

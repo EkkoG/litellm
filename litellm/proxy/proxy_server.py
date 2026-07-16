@@ -7675,11 +7675,18 @@ class ProxyStartupEvent:
         from litellm.proxy.credential_endpoints.chatgpt_daily_quota_snapshot import (
             schedule_chatgpt_daily_quota_snapshot_job,
         )
+        from litellm.proxy.credential_endpoints.chatgpt_quota_history import DatabaseChatGPTQuotaHistoryStore
+        from litellm.repositories.table_repositories import ChatGPTQuotaSnapshotRepository
 
         chatgpt_snapshot_scheduler = snapshot_scheduler or scheduler_factory()
         schedule_chatgpt_daily_quota_snapshot_job(
             scheduler=chatgpt_snapshot_scheduler,
             repository=CredentialsRepository(prisma_client) if prisma_client is not None else None,
+            history_store=(
+                DatabaseChatGPTQuotaHistoryStore(ChatGPTQuotaSnapshotRepository(prisma_client).table)
+                if prisma_client is not None
+                else None
+            ),
         )
         if not chatgpt_snapshot_scheduler.running:
             chatgpt_snapshot_scheduler.start(paused=False)

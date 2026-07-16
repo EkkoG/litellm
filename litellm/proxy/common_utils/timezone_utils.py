@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 import litellm
 from litellm.litellm_core_utils.duration_parser import get_next_standardized_reset_time
@@ -13,6 +14,11 @@ def get_budget_reset_timezone():
     by proxy_server.py at startup (via setattr(litellm, key, value)).
     """
     return getattr(litellm, "timezone", None) or "UTC"
+
+
+def get_current_budget_date(now: datetime | None = None) -> str:
+    current_time = now or datetime.now(timezone.utc)
+    return current_time.astimezone(ZoneInfo(get_budget_reset_timezone())).date().isoformat()
 
 
 def get_budget_reset_time(budget_duration: str) -> datetime:

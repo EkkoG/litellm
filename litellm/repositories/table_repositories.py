@@ -193,6 +193,10 @@ class DeprecatedVerificationTokenRepository(PrismaTableRepository):
     table_name = "litellm_deprecatedverificationtoken"
 
 
+class ChatGPTQuotaSnapshotRepository(PrismaTableRepository):
+    table_name = "litellm_chatgptquotasnapshot"
+
+
 class WorkflowEventRepository(PrismaTableRepository):
     table_name = "litellm_workflowevent"
 
