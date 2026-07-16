@@ -7400,8 +7400,22 @@ class Router:
             # deployment sharing the same backend model name.
             # Each deployment's full pricing is already stored under its
             # unique model_id above.
-            _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
-            _existing_shared_mode = (cast(Optional[dict], litellm.model_cost.get(_model_name, {})) or {}).get("mode")
+            _existing_shared_model_info = litellm.model_cost.get(_model_name) or {}
+            _shared_model_provider = (
+                _existing_shared_model_info.get("litellm_provider")
+                or deployment.litellm_params.custom_llm_provider
+                or _model_info.get("litellm_provider")
+            )
+            _shared_model_info_without_pricing = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info)
+            _shared_model_info = {
+                **{
+                    key: value
+                    for key, value in _shared_model_info_without_pricing.items()
+                    if key not in {"key", "litellm_provider"}
+                },
+                **({"litellm_provider": _shared_model_provider} if _shared_model_provider is not None else {}),
+            }
+            _existing_shared_mode = _existing_shared_model_info.get("mode")
             _deployment_mode = _shared_model_info.get("mode")
             # Keep the built-in bridge mode stable for shared backend keys.
             # Multiple aliases can point at the same provider/model backend,
@@ -8073,7 +8087,21 @@ class Router:
         # deployment sharing the same backend model name.
         # Each deployment's full pricing is already stored under its
         # unique model_id above (when present).
-        _shared_model_info = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info_dict)
+        _existing_shared_model_info = litellm.model_cost.get(_model_name) or {}
+        _shared_model_provider = (
+            _existing_shared_model_info.get("litellm_provider")
+            or deployment.litellm_params.custom_llm_provider
+            or _model_info_dict.get("litellm_provider")
+        )
+        _shared_model_info_without_pricing = CustomPricingLiteLLMParams.strip_custom_pricing_fields(_model_info_dict)
+        _shared_model_info = {
+            **{
+                key: value
+                for key, value in _shared_model_info_without_pricing.items()
+                if key not in {"key", "litellm_provider"}
+            },
+            **({"litellm_provider": _shared_model_provider} if _shared_model_provider is not None else {}),
+        }
         _backend_alias_cost = {_model_name: _shared_model_info}
         if "responses/" in _model_name:
             _stripped_model_name = _model_name.replace("responses/", "")
