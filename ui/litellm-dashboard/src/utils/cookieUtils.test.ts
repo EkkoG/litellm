@@ -172,6 +172,13 @@ describe("cookieUtils", () => {
       expect(cookieSpy).toHaveBeenCalledWith(expect.stringContaining("path=/ui"));
       vi.restoreAllMocks();
     });
+
+    it("should persist the cookie for the supplied session lifetime", () => {
+      const cookieSpy = vi.spyOn(document, "cookie", "set");
+      storeLoginToken("my-jwt-token", 604800);
+      expect(cookieSpy).toHaveBeenCalledWith(expect.stringContaining("Max-Age=604800"));
+      vi.restoreAllMocks();
+    });
   });
 
   describe("getCookie", () => {

@@ -102,6 +102,10 @@ from litellm.proxy._types import (
     TransformRequestBody,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.admin_ui_utils import (
+    get_ui_session_cookie_max_age,
+    set_ui_session_cookie,
+)
 from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
 from litellm.proxy.common_utils.callback_utils import (
     is_sensitive_callback_key,
@@ -13419,7 +13423,11 @@ async def login(request: Request):
 
     # Create redirect response with cookie
     redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-    redirect_response.set_cookie(key="token", value=jwt_token)
+    set_ui_session_cookie(
+        response=redirect_response,
+        token=jwt_token,
+        secure=request.url.scheme == "https",
+    )
     return redirect_response
 
 
@@ -13472,10 +13480,18 @@ async def login_v2(request: Request):
         # cookie even when a reverse proxy (e.g. nginx-ingress) adds HttpOnly to the
         # server-set cookie, which would otherwise cause an infinite login redirect.
         json_response = JSONResponse(
-            content={"redirect_url": litellm_dashboard_ui, "token": jwt_token},
+            content={
+                "redirect_url": litellm_dashboard_ui,
+                "token": jwt_token,
+                "expires_in": get_ui_session_cookie_max_age(),
+            },
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=jwt_token)
+        set_ui_session_cookie(
+            response=json_response,
+            token=jwt_token,
+            secure=request.url.scheme == "https",
+        )
         return json_response
     except Exception as e:
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.login_v2(): Exception occurred - {}".format(str(e)))
@@ -13632,10 +13648,15 @@ async def login_v3_exchange(request: Request):
             content={
                 "token": cached_data["token"],
                 "redirect_url": cached_data["redirect_url"],
+                "expires_in": get_ui_session_cookie_max_age(),
             },
             status_code=status.HTTP_200_OK,
         )
-        json_response.set_cookie(key="token", value=cached_data["token"])
+        set_ui_session_cookie(
+            response=json_response,
+            token=cached_data["token"],
+            secure=request.url.scheme == "https",
+        )
         return json_response
     except ProxyException:
         raise
@@ -13970,6 +13991,7 @@ async def claim_onboarding_link(data: InvitationClaim, request: Request):
     return {
         "login_url": litellm_dashboard_ui,
         "token": jwt_token,
+        "expires_in": get_ui_session_cookie_max_age(),
         "user_email": user_obj.user_email,
         "user": user_obj,
     }

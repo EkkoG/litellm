@@ -10,7 +10,13 @@ Routes covered:
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from fastapi import Request
+
+from litellm.proxy._types import LiteLLM_UserTable
 
 from .conftest import normalize
 
@@ -26,6 +32,7 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
     these helpers, so we patch the module they live in.
     """
     from litellm.proxy import proxy_server as ps
+    from litellm.proxy.common_utils import admin_ui_utils
 
     async def _fake_auth(username, password, master_key, prisma_client, auth_method=None):
         if raise_on_auth:
@@ -53,6 +60,7 @@ def _install_login_mocks(monkeypatch, raise_on_auth: bool = False) -> None:
     monkeypatch.setattr(ps, "master_key", "sk-test-master")
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "premium_user", False)
+    monkeypatch.setattr(admin_ui_utils, "LITELLM_UI_SESSION_DURATION", "24h")
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +150,7 @@ def test_login_form_success_redirects_with_token_cookie(client, monkeypatch):
     sets the 'token' cookie."""
     _install_login_mocks(monkeypatch)
     response = client.post(
-        "/login",
+        "https://testserver/login",
         data={"username": "admin", "password": "password"},
         follow_redirects=False,
     )
@@ -153,13 +161,113 @@ def test_login_form_success_redirects_with_token_cookie(client, monkeypatch):
         "location_has_ui": "/ui/" in location,
         "location_has_login_success": "login=success" in location,
         "has_token_cookie": "token=" in set_cookie,
+        "persistent_cookie": "Max-Age=86400" in set_cookie,
+        "secure_cookie": "Secure" in set_cookie,
     }
     assert shape == {
         "status": 303,
         "location_has_ui": True,
         "location_has_login_success": True,
         "has_token_cookie": True,
+        "persistent_cookie": True,
+        "secure_cookie": True,
     }
+
+
+def test_ui_session_cookie_uses_experimental_login_lifetime(monkeypatch):
+    from litellm.proxy.common_utils import admin_ui_utils
+
+    monkeypatch.setattr(admin_ui_utils, "LITELLM_UI_SESSION_DURATION", "24h")
+    monkeypatch.setattr(
+        "litellm.secret_managers.main.get_secret_bool",
+        lambda key: key == "EXPERIMENTAL_UI_LOGIN",
+    )
+
+    assert admin_ui_utils.get_ui_session_cookie_max_age() == 600
+
+
+def test_sso_redirect_sets_persistent_secure_token_cookie():
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    request = MagicMock(spec=Request)
+    request.base_url = "https://proxy.example.com/"
+    request.url.scheme = "https"
+    user_info = LiteLLM_UserTable(
+        user_id="user-123",
+        user_email="user@example.com",
+        user_role="internal_user",
+        models=[],
+    )
+    user_values = {
+        "models": [],
+        "user_id": "user-123",
+        "user_email": "user@example.com",
+        "max_budget": None,
+        "user_role": "internal_user",
+        "budget_duration": None,
+    }
+
+    with (
+        patch.object(ps, "general_settings", {}),
+        patch.object(ps, "master_key", "sk-test-master-key-with-sufficient-length"),
+        patch.object(ps, "premium_user", False),
+        patch.object(ps, "proxy_logging_obj", MagicMock()),
+        patch.object(ps, "redis_usage_cache", None),
+        patch.object(ps, "user_api_key_cache", MagicMock()),
+        patch.object(ps, "user_custom_sso", None),
+        patch.object(
+            ps,
+            "generate_key_helper_fn",
+            new=AsyncMock(return_value={"token": "sk-ui-token", "user_id": "user-123"}),
+        ),
+        patch("litellm.proxy.utils.get_prisma_client_or_throw", return_value=MagicMock()),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db",
+            new=AsyncMock(return_value=user_info),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso._sync_user_role_from_jwt_role_map",
+            new=AsyncMock(),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.apply_user_info_values_to_sso_user_defined_values",
+            return_value=user_values,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.check_and_update_if_proxy_admin_id",
+            new=AsyncMock(return_value="internal_user"),
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_disabled_non_admin_personal_key_creation",
+            return_value=False,
+        ),
+        patch(
+            "litellm.proxy.management_endpoints.ui_sso.get_custom_url",
+            return_value="https://proxy.example.com/ui/",
+        ),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_secret_bool", return_value=False),
+        patch.object(SSOAuthenticationHandler, "verify_user_in_restricted_sso_group"),
+        patch(
+            "litellm.proxy.common_utils.admin_ui_utils.LITELLM_UI_SESSION_DURATION",
+            "24h",
+        ),
+    ):
+        response = asyncio.run(
+            SSOAuthenticationHandler.get_redirect_response_from_openid(
+                result=SimpleNamespace(
+                    email="user@example.com",
+                    id="user-123",
+                    user_role="internal_user",
+                ),
+                request=request,
+            )
+        )
+
+    token_cookie = next(header for header in response.headers.getlist("set-cookie") if header.startswith("token="))
+    assert "Max-Age=86400" in token_cookie
+    assert "Secure" in token_cookie
 
 
 def test_login_form_authenticate_raises_500(client, monkeypatch):
@@ -186,28 +294,34 @@ def test_login_form_authenticate_raises_500(client, monkeypatch):
 def test_v2_login_success_returns_token_and_redirect(client, monkeypatch):
     """Pin: POST /v2/login returns JSON {redirect_url, token} + sets token cookie."""
     _install_login_mocks(monkeypatch)
+    from litellm.proxy.common_utils import admin_ui_utils
+
+    monkeypatch.setattr(admin_ui_utils, "LITELLM_UI_SESSION_DURATION", "7d")
     response = client.post(
         "/v2/login",
         json={"username": "admin", "password": "password"},
     )
     assert response.status_code == 200
-    assert normalize(
-        response.json(), volatile=frozenset({"token", "redirect_url"})
-    ) == {"redirect_url": "<VOLATILE>", "token": "<VOLATILE>"}
+    assert normalize(response.json(), volatile=frozenset({"token", "redirect_url"})) == {
+        "redirect_url": "<VOLATILE>",
+        "token": "<VOLATILE>",
+        "expires_in": 604800,
+    }
     body = response.json()
     set_cookie = response.headers.get("set-cookie", "")
     shape = {
         "redirect_url_has_ui": "/ui/" in body.get("redirect_url", ""),
-        "redirect_url_has_login_success": "login=success"
-        in body.get("redirect_url", ""),
+        "redirect_url_has_login_success": "login=success" in body.get("redirect_url", ""),
         "token_in_body": bool(body.get("token")),
         "token_cookie_set": "token=" in set_cookie,
+        "persistent_cookie": "Max-Age=604800" in set_cookie,
     }
     assert shape == {
         "redirect_url_has_ui": True,
         "redirect_url_has_login_success": True,
         "token_in_body": True,
         "token_cookie_set": True,
+        "persistent_cookie": True,
     }
 
 
@@ -376,20 +490,24 @@ def test_v3_login_exchange_success_returns_token_and_redirect(client, monkeypatc
 
     response = client.post("/v3/login/exchange", json={"code": "valid-code"})
     assert response.status_code == 200
-    assert normalize(
-        response.json(), volatile=frozenset({"token", "redirect_url"})
-    ) == {"token": "<VOLATILE>", "redirect_url": "<VOLATILE>"}
+    assert normalize(response.json(), volatile=frozenset({"token", "redirect_url"})) == {
+        "token": "<VOLATILE>",
+        "redirect_url": "<VOLATILE>",
+        "expires_in": 86400,
+    }
     body = response.json()
     set_cookie = response.headers.get("set-cookie", "")
     shape = {
         "token": body.get("token"),
         "redirect_url": body.get("redirect_url"),
         "token_cookie_set": "token=" in set_cookie,
+        "persistent_cookie": "Max-Age=86400" in set_cookie,
         "cache_deleted_once": fake_cache.async_delete_cache.await_count == 1,
     }
     assert shape == {
         "token": "jwt-token-xyz",
         "redirect_url": "https://litellm.example.invalid/ui/?login=success",
         "token_cookie_set": True,
+        "persistent_cookie": True,
         "cache_deleted_once": True,
     }

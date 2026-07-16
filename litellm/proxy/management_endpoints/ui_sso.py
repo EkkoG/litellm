@@ -85,6 +85,7 @@ from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.admin_ui_utils import (
     admin_ui_disabled,
+    set_ui_session_cookie,
     show_missing_vars_in_env,
 )
 from litellm.proxy.common_utils.html_forms.jwt_display_template import (
@@ -3209,7 +3210,11 @@ class SSOAuthenticationHandler:
             litellm_dashboard_ui += "?login=success"
         verbose_proxy_logger.info(f"Redirecting to {litellm_dashboard_ui}")
         redirect_response = RedirectResponse(url=litellm_dashboard_ui, status_code=303)
-        redirect_response.set_cookie(key="token", value=jwt_token)
+        set_ui_session_cookie(
+            response=redirect_response,
+            token=jwt_token,
+            secure=request.url.scheme == "https",
+        )
         return redirect_response
 
     @staticmethod

@@ -1,3 +1,29 @@
+from starlette.responses import Response
+
+from litellm.constants import LITELLM_UI_SESSION_DURATION
+from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+
+EXPERIMENTAL_UI_SESSION_COOKIE_MAX_AGE_SECONDS = 10 * 60
+
+
+def get_ui_session_cookie_max_age() -> int:
+    from litellm.secret_managers.main import get_secret_bool
+
+    if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
+        return EXPERIMENTAL_UI_SESSION_COOKIE_MAX_AGE_SECONDS
+    return duration_in_seconds(LITELLM_UI_SESSION_DURATION)
+
+
+def set_ui_session_cookie(response: Response, token: str, secure: bool) -> None:
+    response.set_cookie(
+        key="token",
+        value=token,
+        max_age=get_ui_session_cookie_max_age(),
+        samesite="lax",
+        secure=secure,
+    )
+
+
 def show_missing_vars_in_env():
     from fastapi.responses import HTMLResponse
 

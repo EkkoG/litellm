@@ -124,7 +124,7 @@ describe("OnboardingForm", () => {
       isError: false,
     });
     mockClaimToken.mockImplementation((_params, options) => {
-      options.onSuccess({ token: "NEW_USER_TOKEN" });
+      options.onSuccess({ token: "NEW_USER_TOKEN", expires_in: 604800 });
     });
 
     render(<OnboardingForm variant="signup" />);
@@ -145,7 +145,7 @@ describe("OnboardingForm", () => {
       isError: false,
     });
     mockClaimToken.mockImplementation((_params, options) => {
-      options.onSuccess({ token: "NEW_USER_TOKEN" });
+      options.onSuccess({ token: "NEW_USER_TOKEN", expires_in: 604800 });
     });
 
     const cookieSpy = vi.spyOn(document, "cookie", "set");
@@ -159,7 +159,7 @@ describe("OnboardingForm", () => {
     // a cookie at path=/ alone leaves any pre-existing /ui-scoped admin cookie winning.
     const newTokenCookieAtUiPath = cookieSpy.mock.calls.some(([value]) => {
       const v = String(value);
-      return v.includes("token=NEW_USER_TOKEN") && v.includes("path=/ui");
+      return v.includes("token=NEW_USER_TOKEN") && v.includes("path=/ui") && v.includes("Max-Age=604800");
     });
     expect(newTokenCookieAtUiPath).toBe(true);
 
