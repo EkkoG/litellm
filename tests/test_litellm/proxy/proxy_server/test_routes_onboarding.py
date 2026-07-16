@@ -12,7 +12,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import jwt
-import pytest
 
 from .conftest import normalize
 
@@ -205,6 +204,7 @@ def _make_onboarding_jwt(
 def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma):
     """Valid claim → returns login_url, token, user_email, user."""
     from litellm.proxy import proxy_server as ps
+    from litellm.proxy.common_utils import admin_ui_utils
 
     invite = _make_invite()
     user_obj = _make_user_obj()
@@ -218,6 +218,7 @@ def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma):
     monkeypatch.setattr(ps, "master_key", "sk-master-test")
     monkeypatch.setattr(ps, "general_settings", {})
     monkeypatch.setattr(ps, "premium_user", False)
+    monkeypatch.setattr(admin_ui_utils, "LITELLM_UI_SESSION_DURATION", "24h")
 
     # Avoid hitting generate_key_helper_fn (touches DB / many globals); patch
     # the helper directly so we focus on the route's own behavior.
@@ -240,8 +241,15 @@ def test_claim_onboarding_link_happy(client, monkeypatch, mock_prisma):
     )
     assert response.status_code == 200
     body = response.json()
-    assert set(body.keys()) == {"login_url", "token", "user_email", "user"}
+    assert set(body.keys()) == {
+        "login_url",
+        "token",
+        "user_email",
+        "user",
+        "expires_in",
+    }
     assert body["token"] == "session-jwt-token"
+    assert body["expires_in"] == 86400
     assert body["user_email"] == "alice@example.com"
     assert body["login_url"].endswith("/ui/?login=success")
 

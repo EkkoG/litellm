@@ -7301,14 +7301,14 @@ export const loginCall = async (
 
     const exchangeData: LoginResponse = await exchangeResponse.json();
     if (exchangeData.token) {
-      storeLoginToken(exchangeData.token);
+      storeLoginToken(exchangeData.token, exchangeData.expires_in);
     }
     return exchangeData;
   }
 
   // Backwards compatibility: v2 or old v3 returns token directly
   if (data.token) {
-    storeLoginToken(data.token);
+    storeLoginToken(data.token, data.expires_in);
   }
 
   return data;
@@ -7333,7 +7333,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
 
   const data = await response.json();
   if (data.token) {
-    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+    storeLoginToken(data.token, data.expires_in);
   }
   return data.token;
 };

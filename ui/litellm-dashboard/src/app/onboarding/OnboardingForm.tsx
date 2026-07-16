@@ -39,7 +39,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
     claimToken(
       { accessToken, inviteId, userId, password: formValues.password },
       {
-        onSuccess: (data: { token?: string }) => {
+        onSuccess: (data: { token?: string; expires_in?: number }) => {
           if (!data?.token) {
             setClaimError("Failed to start session. Please try again.");
             return;
@@ -49,7 +49,7 @@ export function OnboardingForm({ variant }: OnboardingFormProps) {
           // session is established, otherwise getCookie() can fall back to
           // the inviter's token.
           clearTokenCookies();
-          storeLoginToken(data.token);
+          storeLoginToken(data.token, data.expires_in);
           const proxyBaseUrl = getProxyBaseUrl();
           window.location.href = proxyBaseUrl ? `${proxyBaseUrl}/ui/?login=success` : "/ui/?login=success";
         },

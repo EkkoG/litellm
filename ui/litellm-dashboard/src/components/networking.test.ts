@@ -95,11 +95,11 @@ describe("loginCall - storeLoginToken integration", () => {
   it("calls storeLoginToken when response includes token", async () => {
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
-      json: async () => ({ redirect_url: "/ui/?login=success", token: "my-jwt" }),
+      json: async () => ({ redirect_url: "/ui/?login=success", token: "my-jwt", expires_in: 604800 }),
     }) as any;
     const { storeLoginToken } = await import("@/utils/cookieUtils");
     await Networking.loginCall("admin", "pass");
-    expect(storeLoginToken).toHaveBeenCalledWith("my-jwt");
+    expect(storeLoginToken).toHaveBeenCalledWith("my-jwt", 604800);
   });
 
   it("does not call storeLoginToken when response has no token", async () => {
@@ -110,6 +110,18 @@ describe("loginCall - storeLoginToken integration", () => {
     const { storeLoginToken } = await import("@/utils/cookieUtils");
     await Networking.loginCall("admin", "pass");
     expect(storeLoginToken).not.toHaveBeenCalled();
+  });
+
+  it("persists a token returned by the cross-origin login-code exchange", async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "worker-jwt", expires_in: 604800 }),
+    }) as any;
+    const { storeLoginToken } = await import("@/utils/cookieUtils");
+
+    await Networking.exchangeLoginCode("single-use-code", "https://worker.example.com");
+
+    expect(storeLoginToken).toHaveBeenCalledWith("worker-jwt", 604800);
   });
 
   it("sends auth_method when loginCall receives an auth method", async () => {

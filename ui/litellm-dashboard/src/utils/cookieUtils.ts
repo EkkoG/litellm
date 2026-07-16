@@ -4,6 +4,8 @@
 
 import { clearAllMcpTokens } from "./mcpTokenStore";
 
+const DEFAULT_LOGIN_COOKIE_MAX_AGE_SECONDS = 24 * 60 * 60;
+
 /**
  * Returns the cookie path for the UI.
  * Derives the path from window.location.pathname so it works when
@@ -83,16 +85,21 @@ export function clearTokenCookies() {
  *     server-set HttpOnly cookie at path "/".
  *  2. Also store in sessionStorage as a secondary fallback.
  */
-export function storeLoginToken(token: string) {
+export function storeLoginToken(token: string, maxAgeSeconds: number = DEFAULT_LOGIN_COOKIE_MAX_AGE_SECONDS) {
   if (typeof window === "undefined") return;
   if (!token || !token.trim()) return;
+
+  const cookieMaxAge =
+    Number.isFinite(maxAgeSeconds) && maxAgeSeconds >= 0
+      ? Math.floor(maxAgeSeconds)
+      : DEFAULT_LOGIN_COOKIE_MAX_AGE_SECONDS;
 
   // 1. JS-accessible cookie at /ui — survives same-tab navigations and
   //    is readable by getCookie() via document.cookie.
   try {
     const secure = window.location.protocol === "https:" ? "; Secure" : "";
     const cookiePath = getUiCookiePath();
-    document.cookie = `token=${encodeURIComponent(token)}; path=${cookiePath}; SameSite=Lax${secure}`;
+    document.cookie = `token=${encodeURIComponent(token)}; path=${cookiePath}; Max-Age=${cookieMaxAge}; SameSite=Lax${secure}`;
   } catch {
     // cookie setting may fail in restrictive environments
   }
