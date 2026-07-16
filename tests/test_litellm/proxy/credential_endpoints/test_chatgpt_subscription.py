@@ -4,7 +4,8 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
-from fastapi import Request, Response
+from fastapi import FastAPI, Request, Response
+from fastapi.testclient import TestClient
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -39,7 +40,7 @@ class StaticQuotaHistoryStore:
         now: datetime | None = None,
     ) -> tuple[ChatGPTDailyQuotaSnapshot, ...]:
         assert credential_name == "chatgpt-config"
-        assert days == 30
+        assert days == ChatGPTQuotaHistoryDays.THIRTY
         assert timezone_name == "Asia/Shanghai"
         assert now is None
         return self._snapshots
@@ -366,11 +367,11 @@ async def test_get_chatgpt_credential_quota_history_returns_runtime_snapshot_wit
         credential_name="chatgpt-config",
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-user"),
         history_store=None,
-        days=30,
+        days=ChatGPTQuotaHistoryDays.THIRTY,
     )
 
     assert response.credential_name == "chatgpt-config"
-    assert response.days == 30
+    assert response.days == ChatGPTQuotaHistoryDays.THIRTY
     assert response.timezone == "UTC"
     assert response.current_date == "2026-07-16"
     assert response.snapshots == [
@@ -381,6 +382,46 @@ async def test_get_chatgpt_credential_quota_history_returns_runtime_snapshot_wit
             tiers=[ChatGPTSubscriptionTier(name="seven_day", remaining_percent=88.5)],
         )
     ]
+
+
+@pytest.mark.parametrize(
+    ("query_days", "expected_days"),
+    (
+        ("7", ChatGPTQuotaHistoryDays.SEVEN),
+        ("30", ChatGPTQuotaHistoryDays.THIRTY),
+        ("90", ChatGPTQuotaHistoryDays.NINETY),
+    ),
+)
+def test_get_chatgpt_credential_quota_history_accepts_http_query_days(
+    monkeypatch: pytest.MonkeyPatch,
+    query_days: str,
+    expected_days: ChatGPTQuotaHistoryDays,
+) -> None:
+    credential = CredentialItem(
+        credential_name="chatgpt-config",
+        credential_values={},
+        credential_info={"custom_llm_provider": "chatgpt"},
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+
+    def auth_override() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_id="admin-user")
+
+    def history_store_override() -> None:
+        return None
+
+    app = FastAPI()
+    app.include_router(endpoints.router)
+    app.dependency_overrides[endpoints.user_api_key_auth] = auth_override
+    app.dependency_overrides[endpoints.get_chatgpt_quota_history_store] = history_store_override
+
+    response = TestClient(app).get(
+        "/credentials/chatgpt-config/chatgpt/quota-history",
+        params={"days": query_days},
+    )
+
+    assert response.status_code == 200, response.json()
+    assert response.json()["days"] == expected_days.value
 
 
 @pytest.mark.asyncio
@@ -427,7 +468,7 @@ async def test_get_chatgpt_credential_quota_history_reads_store_and_merges_parti
         credential_name="chatgpt-config",
         user_api_key_dict=UserAPIKeyAuth(user_id="admin-user"),
         history_store=StaticQuotaHistoryStore(stored_snapshots),
-        days=30,
+        days=ChatGPTQuotaHistoryDays.THIRTY,
     )
 
     assert response.timezone == "Asia/Shanghai"

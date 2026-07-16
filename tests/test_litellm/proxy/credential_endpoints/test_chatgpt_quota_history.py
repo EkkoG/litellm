@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, call, create_autospec
 import pytest
 
 from litellm.proxy.credential_endpoints.chatgpt_quota_history import (
+    ChatGPTQuotaHistoryDays,
     ChatGPTQuotaHistoryRecord,
     ChatGPTQuotaHistoryTable,
     DatabaseChatGPTQuotaHistoryStore,
@@ -155,7 +156,7 @@ async def test_list_groups_tiers_into_daily_snapshots():
 
     snapshots = await store.list(
         credential_name="chatgpt-admin",
-        days=7,
+        days=ChatGPTQuotaHistoryDays.SEVEN,
         timezone_name="UTC",
         now=datetime(2026, 7, 16, 12, tzinfo=timezone.utc),
     )
