@@ -31,6 +31,9 @@ async def test_record_chatgpt_daily_quota_snapshots_uses_global_day_timezone():
     repository = Mock()
     repository.find_by_name = AsyncMock(return_value=credential)
     repository.update_by_name = AsyncMock()
+    history_store = Mock()
+    history_store.save = AsyncMock()
+    history_store.prune = AsyncMock()
 
     async def status_fetcher(
         credential_name: str,
@@ -57,6 +60,7 @@ async def test_record_chatgpt_daily_quota_snapshots_uses_global_day_timezone():
     snapshots = await record_chatgpt_daily_quota_snapshots(
         credentials=(credential,),
         repository=repository,
+        history_store=history_store,
         status_fetcher=status_fetcher,
         credential_refresher=credential_refresher,
         timezone_name="Asia/Shanghai",
@@ -77,6 +81,54 @@ async def test_record_chatgpt_daily_quota_snapshots_uses_global_day_timezone():
     assert stored_info[CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY]["tiers"] == [
         {"name": "seven_day", "remaining_percent": 72.4, "resets_at": None}
     ]
+    history_store.save.assert_awaited_once_with("chatgpt-admin", snapshots[0])
+    history_store.prune.assert_awaited_once_with("2026-07-16")
+
+
+@pytest.mark.asyncio
+async def test_record_chatgpt_daily_quota_snapshots_keeps_latest_snapshot_when_history_save_fails():
+    credential = CredentialItem(
+        credential_name="chatgpt-admin",
+        credential_values={"api_key": "access-token"},
+        credential_info={"custom_llm_provider": "chatgpt"},
+    )
+    repository = Mock()
+    repository.find_by_name = AsyncMock(return_value=credential)
+    repository.update_by_name = AsyncMock()
+    history_store = Mock()
+    history_store.save = AsyncMock(side_effect=RuntimeError("history unavailable"))
+    history_store.prune = AsyncMock()
+
+    async def status_fetcher(
+        credential_name: str,
+        access_token: str,
+        account_id: str | None,
+    ) -> ChatGPTSubscriptionStatus:
+        return ChatGPTSubscriptionStatus(
+            credential_name=credential_name,
+            success=True,
+            credential_status="valid",
+            tiers=[ChatGPTSubscriptionTier(name="seven_day", remaining_percent=72.4)],
+            queried_at=1,
+        )
+
+    def credential_refresher(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
+        return {"api_key": "access-token"}
+
+    snapshots = await record_chatgpt_daily_quota_snapshots(
+        credentials=(credential,),
+        repository=repository,
+        history_store=history_store,
+        status_fetcher=status_fetcher,
+        credential_refresher=credential_refresher,
+        timezone_name="UTC",
+        now=datetime(2026, 7, 15, tzinfo=timezone.utc),
+    )
+
+    assert len(snapshots) == 1
+    history_store.save.assert_awaited_once_with("chatgpt-admin", snapshots[0])
+    history_store.prune.assert_awaited_once_with("2026-07-15")
+    repository.update_by_name.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -126,6 +178,23 @@ async def test_record_chatgpt_daily_quota_snapshots_updates_config_credential_ru
 
 
 @pytest.mark.asyncio
+async def test_record_chatgpt_daily_quota_snapshots_prunes_history_without_active_credentials():
+    history_store = Mock()
+    history_store.prune = AsyncMock()
+
+    snapshots = await record_chatgpt_daily_quota_snapshots(
+        credentials=(),
+        repository=None,
+        history_store=history_store,
+        timezone_name="UTC",
+        now=datetime(2026, 7, 15, tzinfo=timezone.utc),
+    )
+
+    assert snapshots == ()
+    history_store.prune.assert_awaited_once_with("2026-07-15")
+
+
+@pytest.mark.asyncio
 async def test_schedule_chatgpt_daily_quota_snapshot_job_checks_current_global_midnight():
     scheduler = AsyncIOScheduler()
     repository = Mock()
@@ -136,12 +205,14 @@ async def test_schedule_chatgpt_daily_quota_snapshot_job_checks_current_global_m
     )
     credential_source = Mock(return_value=(credential,))
     recorder = AsyncMock(return_value=())
+    history_store = Mock()
     timezone_provider = Mock(return_value="Asia/Shanghai")
     now_provider = Mock(return_value=datetime(2026, 7, 15, 16, 0, tzinfo=timezone.utc))
 
     schedule_chatgpt_daily_quota_snapshot_job(
         scheduler=scheduler,
         repository=repository,
+        history_store=history_store,
         credential_source=credential_source,
         recorder=recorder,
         timezone_provider=timezone_provider,
@@ -158,6 +229,7 @@ async def test_schedule_chatgpt_daily_quota_snapshot_job_checks_current_global_m
     recorder.assert_awaited_once_with(
         credentials=(credential,),
         repository=repository,
+        history_store=history_store,
         timezone_name="Asia/Shanghai",
     )
 

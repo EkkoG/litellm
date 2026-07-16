@@ -1,15 +1,20 @@
+from datetime import datetime
+from typing import cast
 from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from fastapi import Request, Response
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.credential_endpoints import endpoints
+from litellm.proxy.credential_endpoints.chatgpt_quota_history import ChatGPTQuotaHistoryDays
 from litellm.proxy.credential_endpoints.chatgpt_subscription import (
     CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY,
     ChatGPTDailyQuotaSnapshot,
     ChatGPTResetCreditConsumeRequest,
+    ChatGPTSubscriptionStatus,
     ChatGPTSubscriptionTier,
     consume_chatgpt_rate_limit_reset_credit,
     get_chatgpt_access_token,
@@ -19,6 +24,25 @@ from litellm.proxy.credential_endpoints.chatgpt_subscription import (
     query_chatgpt_subscription_status,
 )
 from litellm.types.utils import CredentialItem
+
+
+class StaticQuotaHistoryStore:
+    def __init__(self, snapshots: tuple[ChatGPTDailyQuotaSnapshot, ...]) -> None:
+        self._snapshots = snapshots
+
+    async def list(
+        self,
+        *,
+        credential_name: str,
+        days: ChatGPTQuotaHistoryDays,
+        timezone_name: str,
+        now: datetime | None = None,
+    ) -> tuple[ChatGPTDailyQuotaSnapshot, ...]:
+        assert credential_name == "chatgpt-config"
+        assert days == 30
+        assert timezone_name == "Asia/Shanghai"
+        assert now is None
+        return self._snapshots
 
 
 def test_parse_chatgpt_subscription_usage_maps_known_windows():
@@ -242,6 +266,7 @@ async def test_get_chatgpt_credential_subscription_uses_refreshed_values(monkeyp
         }
     )
     monkeypatch.setattr(endpoints, "query_chatgpt_subscription_status", query)
+    monkeypatch.setattr(endpoints, "get_current_budget_date", lambda: "2026-07-15")
 
     response = await endpoints.get_chatgpt_credential_subscription(
         request=None,
@@ -263,6 +288,162 @@ async def test_get_chatgpt_credential_subscription_uses_refreshed_values(monkeyp
             tiers=[ChatGPTSubscriptionTier(name="seven_day", remaining_percent=88.5)],
         ),
     )
+
+
+@pytest.mark.asyncio
+async def test_get_chatgpt_credential_subscription_omits_stale_daily_snapshot(monkeypatch: pytest.MonkeyPatch):
+    credential = CredentialItem(
+        credential_name="chatgpt-admin",
+        credential_values={"api_key": "access-token"},
+        credential_info={
+            "custom_llm_provider": "chatgpt",
+            CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY: {
+                "date": "2026-07-15",
+                "timezone": "UTC",
+                "captured_at": "2026-07-15T00:00:00Z",
+                "tiers": [{"name": "seven_day", "remaining_percent": 88.5}],
+            },
+        },
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    monkeypatch.setattr(endpoints, "get_current_budget_date", lambda: "2026-07-16")
+    query = AsyncMock(
+        return_value=ChatGPTSubscriptionStatus(
+            credential_name="chatgpt-admin",
+            success=True,
+            credential_status="valid",
+            tiers=[],
+            queried_at=1,
+        )
+    )
+
+    def credential_refresher(credential: CredentialItem, user_id: str | None) -> dict[str, str]:
+        return {"api_key": "access-token"}
+
+    monkeypatch.setattr(endpoints, "refresh_chatgpt_credential_if_needed", credential_refresher)
+    monkeypatch.setattr(endpoints, "query_chatgpt_subscription_status", query)
+
+    await endpoints.get_chatgpt_credential_subscription(
+        request=cast(Request, None),
+        fastapi_response=cast(Response, None),
+        credential_name="chatgpt-admin",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-user"),
+    )
+
+    query.assert_awaited_once_with(
+        credential_name="chatgpt-admin",
+        access_token="access-token",
+        account_id=None,
+        plan_label=None,
+        daily_snapshot=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_chatgpt_credential_quota_history_returns_runtime_snapshot_without_database(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    credential = CredentialItem(
+        credential_name="chatgpt-config",
+        credential_values={},
+        credential_info={
+            "custom_llm_provider": "chatgpt",
+            CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY: {
+                "date": "2026-07-16",
+                "timezone": "UTC",
+                "captured_at": "2026-07-16T00:00:00Z",
+                "tiers": [{"name": "seven_day", "remaining_percent": 88.5}],
+            },
+        },
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    monkeypatch.setattr(endpoints, "get_budget_reset_timezone", lambda: "UTC")
+    monkeypatch.setattr(endpoints, "get_current_budget_date", lambda: "2026-07-16")
+
+    response = await endpoints.get_chatgpt_credential_quota_history(
+        request=cast(Request, None),
+        fastapi_response=cast(Response, None),
+        credential_name="chatgpt-config",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-user"),
+        history_store=None,
+        days=30,
+    )
+
+    assert response.credential_name == "chatgpt-config"
+    assert response.days == 30
+    assert response.timezone == "UTC"
+    assert response.current_date == "2026-07-16"
+    assert response.snapshots == [
+        ChatGPTDailyQuotaSnapshot(
+            date="2026-07-16",
+            timezone="UTC",
+            captured_at="2026-07-16T00:00:00Z",
+            tiers=[ChatGPTSubscriptionTier(name="seven_day", remaining_percent=88.5)],
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_get_chatgpt_credential_quota_history_reads_store_and_merges_partial_current_day(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    credential = CredentialItem(
+        credential_name="chatgpt-config",
+        credential_values={},
+        credential_info={
+            "custom_llm_provider": "chatgpt",
+            CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY: {
+                "date": "2026-07-16",
+                "timezone": "Asia/Shanghai",
+                "captured_at": "2026-07-15T16:00:00Z",
+                "tiers": [
+                    {"name": "five_hour", "remaining_percent": 72},
+                    {"name": "seven_day", "remaining_percent": 88},
+                ],
+            },
+        },
+    )
+    stored_snapshots = (
+        ChatGPTDailyQuotaSnapshot(
+            date="2026-07-15",
+            timezone="Asia/Shanghai",
+            captured_at="2026-07-14T16:00:00Z",
+            tiers=[ChatGPTSubscriptionTier(name="seven_day", remaining_percent=92)],
+        ),
+        ChatGPTDailyQuotaSnapshot(
+            date="2026-07-16",
+            timezone="Asia/Shanghai",
+            captured_at="2026-07-15T16:00:00Z",
+            tiers=[ChatGPTSubscriptionTier(name="five_hour", remaining_percent=70)],
+        ),
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+    monkeypatch.setattr(endpoints, "get_budget_reset_timezone", lambda: "Asia/Shanghai")
+    monkeypatch.setattr(endpoints, "get_current_budget_date", lambda: "2026-07-16")
+
+    response = await endpoints.get_chatgpt_credential_quota_history(
+        request=cast(Request, None),
+        fastapi_response=cast(Response, None),
+        credential_name="chatgpt-config",
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin-user"),
+        history_store=StaticQuotaHistoryStore(stored_snapshots),
+        days=30,
+    )
+
+    assert response.timezone == "Asia/Shanghai"
+    assert response.current_date == "2026-07-16"
+    assert response.snapshots == [
+        stored_snapshots[0],
+        ChatGPTDailyQuotaSnapshot(
+            date="2026-07-16",
+            timezone="Asia/Shanghai",
+            captured_at="2026-07-15T16:00:00Z",
+            tiers=[
+                ChatGPTSubscriptionTier(name="five_hour", remaining_percent=72),
+                ChatGPTSubscriptionTier(name="seven_day", remaining_percent=88),
+            ],
+        ),
+    ]
 
 
 @pytest.mark.asyncio

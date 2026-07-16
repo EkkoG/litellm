@@ -7,10 +7,12 @@ import CredentialsPanel from "./credentials";
 
 const DEFAULT_UPLOAD_PROPS = {} as UploadProps;
 
-const { mockChatGPTResetCreditConsumeCall, mockChatGPTSubscriptionStatusCall } = vi.hoisted(() => ({
-  mockChatGPTResetCreditConsumeCall: vi.fn(),
-  mockChatGPTSubscriptionStatusCall: vi.fn(),
-}));
+const { mockChatGPTQuotaHistoryCall, mockChatGPTResetCreditConsumeCall, mockChatGPTSubscriptionStatusCall } =
+  vi.hoisted(() => ({
+    mockChatGPTQuotaHistoryCall: vi.fn(),
+    mockChatGPTResetCreditConsumeCall: vi.fn(),
+    mockChatGPTSubscriptionStatusCall: vi.fn(),
+  }));
 
 const mockUseAuthorized = vi.fn();
 const mockUseCredentials = vi.fn();
@@ -19,6 +21,7 @@ vi.mock("@/components/networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/components/networking")>();
   return {
     ...actual,
+    chatgptCredentialQuotaHistoryCall: mockChatGPTQuotaHistoryCall,
     chatgptCredentialResetCreditConsumeCall: mockChatGPTResetCreditConsumeCall,
     chatgptCredentialSubscriptionStatusCall: mockChatGPTSubscriptionStatusCall,
   };
@@ -44,6 +47,7 @@ const createQueryClient = () =>
 
 describe("CredentialsPanel", () => {
   beforeEach(() => {
+    mockChatGPTQuotaHistoryCall.mockReset();
     mockChatGPTResetCreditConsumeCall.mockReset();
     mockChatGPTSubscriptionStatusCall.mockReset();
   });
@@ -120,6 +124,24 @@ describe("CredentialsPanel", () => {
       queried_at: Date.now(),
     };
     mockChatGPTSubscriptionStatusCall.mockResolvedValue(subscriptionStatus);
+    mockChatGPTQuotaHistoryCall.mockResolvedValue({
+      credential_name: "chatgpt-admin",
+      days: 30,
+      timezone: "UTC",
+      current_date: "2026-07-15",
+      snapshots: [
+        {
+          date: "2026-07-14",
+          timezone: "UTC",
+          captured_at: "2026-07-14T00:00:00Z",
+          tiers: [
+            { name: "five_hour", remaining_percent: 88, resets_at: null },
+            { name: "seven_day", remaining_percent: 94, resets_at: null },
+          ],
+        },
+        subscriptionStatus.daily_snapshot,
+      ],
+    });
 
     mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "Admin" });
     mockUseCredentials.mockReturnValue({
@@ -138,8 +160,31 @@ describe("CredentialsPanel", () => {
     });
     expect(screen.getByText("5h 74.9% remaining")).toBeInTheDocument();
     expect(screen.getByText("7d 90% remaining")).toBeInTheDocument();
-    expect(screen.getByText("Daily start 2026-07-15 (UTC): 5h 80.5% · 7d 92%")).toBeInTheDocument();
+    expect(screen.getByText("Today start: 5h 80.5% · 7d 92%")).toBeInTheDocument();
     expect(mockChatGPTSubscriptionStatusCall).toHaveBeenCalledWith("test-token", "chatgpt-admin");
+    expect(mockChatGPTQuotaHistoryCall).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "History" }));
+
+    await waitFor(() => {
+      expect(mockChatGPTQuotaHistoryCall).toHaveBeenCalledWith("test-token", "chatgpt-admin", 30);
+    });
+    expect(screen.getByText("Pro quota history")).toBeInTheDocument();
+    expect(screen.getByText("chatgpt-admin · Daily boundary: UTC")).toBeInTheDocument();
+    expect(await screen.findByText("5h daily start")).toBeInTheDocument();
+    expect(screen.getByText("74.9%")).toBeInTheDocument();
+    expect(screen.getByText("-5.6%")).toBeInTheDocument();
+    expect(screen.getAllByText("2026-07-14").length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByText("7 days"));
+    await waitFor(() => {
+      expect(mockChatGPTQuotaHistoryCall).toHaveBeenCalledWith("test-token", "chatgpt-admin", 7);
+    });
+
+    fireEvent.click(screen.getByText("90 days"));
+    await waitFor(() => {
+      expect(mockChatGPTQuotaHistoryCall).toHaveBeenCalledWith("test-token", "chatgpt-admin", 90);
+    });
   });
 
   it("should display reset credits and consume a selected credit", async () => {

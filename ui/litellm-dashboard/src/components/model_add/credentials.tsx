@@ -27,7 +27,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
 import NotificationsManager from "../molecules/notifications_manager";
 import AddCredentialsTab from "./AddCredentialModal";
+import { ChatGPTQuotaHistoryDrawer } from "./ChatGPTQuotaHistoryDrawer";
 import EditCredentialsModal from "./EditCredentialModal";
+import { chatgptTierLabel, formatChatGPTQuotaPercent } from "./chatgptQuotaDisplay";
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -37,28 +39,17 @@ interface CredentialsPanelProps {
 
 const CHATGPT_PROVIDER = "chatgpt";
 const CHATGPT_SUBSCRIPTION_STALE_TIME_MS = 5 * 60 * 1000;
-const CHATGPT_TIER_LABELS: Record<string, string> = {
-  five_hour: "5h",
-  seven_day: "7d",
-  "30_day": "30d",
-};
-
 const getCredentialProvider = (credential: CredentialItem): string =>
   String(credential.credential_info?.custom_llm_provider || "").toLowerCase();
 
 const isChatGPTCredential = (credential: CredentialItem): boolean =>
   getCredentialProvider(credential) === CHATGPT_PROVIDER;
 
-const tierLabel = (name: string): string => CHATGPT_TIER_LABELS[name] || name.replace(/_/g, " ");
-
 const tierColor = (remainingPercent: number): "green" | "yellow" | "red" => {
   if (remainingPercent <= 10) return "red";
   if (remainingPercent <= 30) return "yellow";
   return "green";
 };
-
-const formatQuotaPercent = (remainingPercent: number): string =>
-  new Intl.NumberFormat("en-US", { maximumFractionDigits: 1 }).format(remainingPercent);
 
 const formatResetCountdown = (resetsAt?: string | null): string | null => {
   if (!resetsAt) {
@@ -196,6 +187,7 @@ const ChatGPTSubscriptionStatusCell: React.FC<{
   credential: CredentialItem;
   accessToken?: string;
 }> = ({ credential, accessToken }) => {
+  const [historyOpen, setHistoryOpen] = useState(false);
   const enabled = Boolean(accessToken) && isChatGPTCredential(credential);
   const subscriptionQuery = {
     queryKey: ["chatgpt-credential-subscription", credential.credential_name],
@@ -247,40 +239,60 @@ const ChatGPTSubscriptionStatusCell: React.FC<{
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
-      <Badge color="blue" size="xs">
-        {statusLabel(status)}
-      </Badge>
-      {status.tiers.map((tier) => {
-        const countdown = formatResetCountdown(tier.resets_at);
-        return (
-          <Badge key={tier.name} color={tierColor(tier.remaining_percent)} size="xs">
-            {tierLabel(tier.name)} {formatQuotaPercent(tier.remaining_percent)}% remaining
-            {countdown ? ` · ${countdown}` : ""}
-          </Badge>
-        );
-      })}
-      {status.daily_snapshot && (
-        <Text className="basis-full text-xs text-gray-500">
-          Daily start {status.daily_snapshot.date} ({status.daily_snapshot.timezone}):{" "}
-          {status.daily_snapshot.tiers
-            .map((tier) => `${tierLabel(tier.name)} ${formatQuotaPercent(tier.remaining_percent)}%`)
-            .join(" · ")}
-        </Text>
-      )}
+    <>
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge color="blue" size="xs">
+          {statusLabel(status)}
+        </Badge>
+        {status.tiers.map((tier) => {
+          const countdown = formatResetCountdown(tier.resets_at);
+          return (
+            <Badge key={tier.name} color={tierColor(tier.remaining_percent)} size="xs">
+              {chatgptTierLabel(tier.name)} {formatChatGPTQuotaPercent(tier.remaining_percent)}% remaining
+              {countdown ? ` · ${countdown}` : ""}
+            </Badge>
+          );
+        })}
+        {accessToken && (
+          <div className="flex basis-full flex-wrap items-center gap-2">
+            {status.daily_snapshot && (
+              <Text className="text-xs text-gray-500">
+                Today start:{" "}
+                {status.daily_snapshot.tiers
+                  .map((tier) => `${chatgptTierLabel(tier.name)} ${formatChatGPTQuotaPercent(tier.remaining_percent)}%`)
+                  .join(" · ")}
+              </Text>
+            )}
+            <Button size="xs" variant="light" onClick={() => setHistoryOpen(true)}>
+              History
+            </Button>
+          </div>
+        )}
+        {accessToken && (
+          <ChatGPTResetCreditsList
+            credential={credential}
+            accessToken={accessToken}
+            status={status}
+            isFetching={isFetching}
+            onRefresh={refetch}
+          />
+        )}
+        <Button size="xs" variant="light" disabled={isFetching} onClick={() => void refetch()}>
+          {isFetching ? "Refreshing" : "Refresh"}
+        </Button>
+      </div>
       {accessToken && (
-        <ChatGPTResetCreditsList
-          credential={credential}
+        <ChatGPTQuotaHistoryDrawer
+          open={historyOpen}
+          onClose={() => setHistoryOpen(false)}
           accessToken={accessToken}
-          status={status}
-          isFetching={isFetching}
-          onRefresh={refetch}
+          credentialName={credential.credential_name}
+          planLabel={statusLabel(status)}
+          currentTiers={status.tiers}
+          timezone={status.daily_snapshot?.timezone}
         />
       )}
-      <Button size="xs" variant="light" disabled={isFetching} onClick={() => void refetch()}>
-        {isFetching ? "Refreshing" : "Refresh"}
-      </Button>
-    </div>
+    </>
   );
 };
 

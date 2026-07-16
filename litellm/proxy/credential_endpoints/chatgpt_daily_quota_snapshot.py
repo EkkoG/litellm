@@ -41,8 +41,15 @@ class ChatGPTSnapshotRecorder(Protocol):
         *,
         credentials: Sequence[CredentialItem],
         repository: CredentialsRepository | None,
+        history_store: ChatGPTQuotaHistoryStore | None,
         timezone_name: str,
     ) -> tuple[ChatGPTDailyQuotaSnapshot, ...]: ...
+
+
+class ChatGPTQuotaHistoryStore(Protocol):
+    async def save(self, credential_name: str, snapshot: ChatGPTDailyQuotaSnapshot) -> None: ...
+
+    async def prune(self, reference_date: str) -> None: ...
 
 
 class ChatGPTSnapshotScheduler(Protocol):
@@ -51,6 +58,7 @@ class ChatGPTSnapshotScheduler(Protocol):
         func: Callable[
             [
                 CredentialsRepository | None,
+                ChatGPTQuotaHistoryStore | None,
                 ChatGPTCredentialSource,
                 ChatGPTSnapshotRecorder,
                 ChatGPTTimezoneProvider,
@@ -71,6 +79,7 @@ class ChatGPTSnapshotScheduler(Protocol):
 async def record_chatgpt_daily_quota_snapshots(
     credentials: Sequence[CredentialItem],
     repository: CredentialsRepository | None,
+    history_store: ChatGPTQuotaHistoryStore | None = None,
     status_fetcher: ChatGPTSnapshotStatusFetcher | None = None,
     credential_refresher: ChatGPTCredentialRefresher | None = None,
     runtime_credential_upsert: ChatGPTRuntimeCredentialUpsert | None = None,
@@ -88,6 +97,7 @@ async def record_chatgpt_daily_quota_snapshots(
             _record_chatgpt_daily_quota_snapshot(
                 credential=credential,
                 writer=writer,
+                history_store=history_store,
                 status_fetcher=effective_status_fetcher,
                 credential_refresher=effective_credential_refresher,
                 runtime_credential_upsert=effective_runtime_credential_upsert,
@@ -98,12 +108,15 @@ async def record_chatgpt_daily_quota_snapshots(
             if is_chatgpt_credential(credential)
         )
     )
+    reference_date = capture_time.astimezone(ZoneInfo(snapshot_timezone)).date().isoformat()
+    await _prune_history_snapshots(history_store, reference_date)
     return tuple(snapshot for snapshot in results if snapshot is not None)
 
 
 def schedule_chatgpt_daily_quota_snapshot_job(
     scheduler: ChatGPTSnapshotScheduler,
     repository: CredentialsRepository | None,
+    history_store: ChatGPTQuotaHistoryStore | None = None,
     credential_source: ChatGPTCredentialSource | None = None,
     recorder: ChatGPTSnapshotRecorder | None = None,
     timezone_provider: ChatGPTTimezoneProvider | None = None,
@@ -116,6 +129,7 @@ def schedule_chatgpt_daily_quota_snapshot_job(
         timezone=ZoneInfo("UTC"),
         args=[
             repository,
+            history_store,
             credential_source or _get_runtime_credentials,
             recorder or record_chatgpt_daily_quota_snapshots,
             timezone_provider or get_budget_reset_timezone,
@@ -128,6 +142,7 @@ def schedule_chatgpt_daily_quota_snapshot_job(
 
 async def _run_scheduled_chatgpt_daily_quota_snapshot(
     repository: CredentialsRepository | None,
+    history_store: ChatGPTQuotaHistoryStore | None,
     credential_source: ChatGPTCredentialSource,
     recorder: ChatGPTSnapshotRecorder,
     timezone_provider: ChatGPTTimezoneProvider,
@@ -141,6 +156,7 @@ async def _run_scheduled_chatgpt_daily_quota_snapshot(
     await recorder(
         credentials=credential_source(),
         repository=repository,
+        history_store=history_store,
         timezone_name=timezone_name,
     )
 
@@ -177,6 +193,7 @@ async def _query_chatgpt_snapshot_status(
 async def _record_chatgpt_daily_quota_snapshot(
     credential: CredentialItem,
     writer: CredentialWriter | None,
+    history_store: ChatGPTQuotaHistoryStore | None,
     status_fetcher: ChatGPTSnapshotStatusFetcher,
     credential_refresher: ChatGPTCredentialRefresher,
     runtime_credential_upsert: ChatGPTRuntimeCredentialUpsert,
@@ -213,6 +230,7 @@ async def _record_chatgpt_daily_quota_snapshot(
                 ),
             )
         )
+        await _save_history_snapshot(history_store, credential.credential_name, snapshot)
         if writer is None:
             return snapshot
         result = await writer.patch(
@@ -232,6 +250,35 @@ async def _record_chatgpt_daily_quota_snapshot(
             exc,
         )
         return None
+
+
+async def _save_history_snapshot(
+    history_store: ChatGPTQuotaHistoryStore | None,
+    credential_name: str,
+    snapshot: ChatGPTDailyQuotaSnapshot,
+) -> None:
+    if history_store is None:
+        return
+    try:
+        await history_store.save(credential_name, snapshot)
+    except Exception as exc:
+        verbose_proxy_logger.warning(
+            "Failed to persist ChatGPT quota history for credential %s: %s",
+            credential_name,
+            exc,
+        )
+
+
+async def _prune_history_snapshots(
+    history_store: ChatGPTQuotaHistoryStore | None,
+    reference_date: str,
+) -> None:
+    if history_store is None:
+        return
+    try:
+        await history_store.prune(reference_date)
+    except Exception as exc:
+        verbose_proxy_logger.warning("Failed to prune ChatGPT quota history: %s", exc)
 
 
 def _datetime_to_iso(value: datetime) -> str:

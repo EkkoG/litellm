@@ -55,6 +55,23 @@ model LiteLLM_DeviceLoginState {
   @@index([expires_at])
 }
 
+model LiteLLM_ChatGPTQuotaSnapshot {
+  snapshot_id       String   @id @default(uuid())
+  credential_name   String
+  snapshot_date     String
+  timezone          String
+  captured_at       DateTime
+  tier_name         String
+  remaining_percent Float
+  resets_at         DateTime?
+  created_at        DateTime @default(now()) @map("created_at")
+  updated_at        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@unique([credential_name, snapshot_date, tier_name])
+  @@index([credential_name, snapshot_date])
+  @@index([snapshot_date])
+}
+
 // Models on proxy
 model LiteLLM_ProxyModelTable {
   model_id String @id @default(uuid())

@@ -312,6 +312,16 @@ export interface ChatGPTDailyQuotaSnapshot {
   tiers: ChatGPTSubscriptionTier[];
 }
 
+export type ChatGPTQuotaHistoryDays = 7 | 30 | 90;
+
+export interface ChatGPTQuotaHistoryResponse {
+  credential_name: string;
+  days: ChatGPTQuotaHistoryDays;
+  timezone: string;
+  current_date: string;
+  snapshots: ChatGPTDailyQuotaSnapshot[];
+}
+
 export interface ChatGPTRateLimitResetCredit {
   id: string;
   reset_type: string;
@@ -2668,6 +2678,15 @@ export const chatgptCredentialSubscriptionStatusCall = async (
   credentialName: string,
 ): Promise<ChatGPTSubscriptionStatus> =>
   apiClient.get(`/credentials/${encodeURIComponent(credentialName)}/chatgpt/subscription`, {
+    accessToken,
+  });
+
+export const chatgptCredentialQuotaHistoryCall = async (
+  accessToken: string,
+  credentialName: string,
+  days: ChatGPTQuotaHistoryDays,
+): Promise<ChatGPTQuotaHistoryResponse> =>
+  apiClient.get(`/credentials/${encodeURIComponent(credentialName)}/chatgpt/quota-history?days=${days}`, {
     accessToken,
   });
 

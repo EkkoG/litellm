@@ -4,7 +4,7 @@ CRUD endpoints for storing reusable credentials.
 
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel
 
 import litellm
@@ -15,7 +15,16 @@ from litellm.llms.chatgpt.device_authorization import ChatGPTDeviceAuthorization
 from litellm.llms.github_copilot.device_authorization import GitHubCopilotDeviceAuthorizationProvider
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.timezone_utils import get_budget_reset_timezone, get_current_budget_date
 from litellm.proxy.credential_endpoints.chatgpt_credential_utils import refresh_chatgpt_credential_if_needed
+from litellm.proxy.credential_endpoints.chatgpt_quota_history import (
+    ChatGPTQuotaHistoryDays,
+    ChatGPTQuotaHistoryReader,
+    ChatGPTQuotaHistoryResponse,
+    ChatGPTQuotaHistoryTable,
+    DatabaseChatGPTQuotaHistoryStore,
+    merge_chatgpt_quota_snapshots,
+)
 from litellm.proxy.credential_endpoints.chatgpt_subscription import (
     ChatGPTDailyQuotaSnapshot,
     ChatGPTResetCreditConsumeRequest,
@@ -49,6 +58,7 @@ from litellm.proxy.credential_endpoints.device_login_state_store import (
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
 from litellm.repositories.credentials_repository import CredentialsRepository
+from litellm.repositories.table_repositories import ChatGPTQuotaSnapshotRepository
 from litellm.types.utils import CreateCredentialItem, CredentialItem
 
 router = APIRouter()
@@ -290,6 +300,17 @@ async def poll_github_copilot_device_login(
     return await _poll_device_login(body, user_api_key_dict)
 
 
+def get_chatgpt_quota_history_store() -> ChatGPTQuotaHistoryReader | None:
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        return None
+    table: object = ChatGPTQuotaSnapshotRepository(prisma_client).table
+    if not isinstance(table, ChatGPTQuotaHistoryTable):
+        raise RuntimeError("ChatGPT quota history table is unavailable")
+    return DatabaseChatGPTQuotaHistoryStore(table)
+
+
 @router.get(
     "/credentials",
     dependencies=[Depends(user_api_key_auth)],
@@ -425,6 +446,48 @@ async def get_chatgpt_credential_subscription(
         raise handle_exception_on_proxy(e)
 
 
+@router.get(
+    "/credentials/{credential_name:path}/chatgpt/quota-history",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["credential management"],
+    response_model=ChatGPTQuotaHistoryResponse,
+)
+async def get_chatgpt_credential_quota_history(
+    request: Request,
+    fastapi_response: Response,
+    credential_name: Annotated[
+        str,
+        Path(description="The ChatGPT credential name, percent-decoded; may contain slashes"),
+    ],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    history_store: Annotated[ChatGPTQuotaHistoryReader | None, Depends(get_chatgpt_quota_history_store)],
+    days: Annotated[ChatGPTQuotaHistoryDays, Query()] = 30,
+) -> ChatGPTQuotaHistoryResponse:
+    try:
+        credential = _get_chatgpt_credential(credential_name)
+        current_snapshot = get_chatgpt_daily_quota_snapshot(credential.credential_info or {})
+        stored_snapshots = (
+            await history_store.list(
+                credential_name=credential_name,
+                days=days,
+                timezone_name=get_budget_reset_timezone(),
+            )
+            if history_store is not None
+            else ()
+        )
+        timezone_name = get_budget_reset_timezone()
+        return ChatGPTQuotaHistoryResponse(
+            credential_name=credential_name,
+            days=days,
+            timezone=timezone_name,
+            current_date=get_current_budget_date(),
+            snapshots=list(merge_chatgpt_quota_snapshots(stored_snapshots, current_snapshot)),
+        )
+    except Exception as e:
+        verbose_proxy_logger.exception(e)
+        raise handle_exception_on_proxy(e)
+
+
 @router.post(
     "/credentials/{credential_name:path}/chatgpt/rate-limit-reset-credits/consume",
     dependencies=[Depends(user_api_key_auth)],
@@ -459,6 +522,30 @@ def _get_chatgpt_credential_auth(
     credential_name: str,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> ChatGPTCredentialAuth:
+    credential = _get_chatgpt_credential(credential_name)
+
+    credential_values = refresh_chatgpt_credential_if_needed(
+        credential=credential,
+        user_id=user_api_key_dict.user_id,
+    )
+    access_token = get_chatgpt_access_token(credential_values)
+    if access_token is None:
+        raise HTTPException(status_code=400, detail="ChatGPT credential is missing an access token")
+
+    daily_snapshot = get_chatgpt_daily_quota_snapshot(credential.credential_info or {})
+    current_daily_snapshot = (
+        daily_snapshot if daily_snapshot is not None and daily_snapshot.date == get_current_budget_date() else None
+    )
+    return ChatGPTCredentialAuth(
+        credential_name=credential.credential_name,
+        access_token=access_token,
+        account_id=get_chatgpt_account_id(credential_values),
+        plan_label=get_chatgpt_plan_label(credential_values),
+        daily_snapshot=current_daily_snapshot,
+    )
+
+
+def _get_chatgpt_credential(credential_name: str) -> CredentialItem:
     credential = next(
         (credential for credential in litellm.credential_list if credential.credential_name == credential_name),
         None,
@@ -470,22 +557,7 @@ def _get_chatgpt_credential_auth(
         )
     if not is_chatgpt_credential(credential):
         raise HTTPException(status_code=400, detail="Credential is not a ChatGPT credential")
-
-    credential_values = refresh_chatgpt_credential_if_needed(
-        credential=credential,
-        user_id=user_api_key_dict.user_id,
-    )
-    access_token = get_chatgpt_access_token(credential_values)
-    if access_token is None:
-        raise HTTPException(status_code=400, detail="ChatGPT credential is missing an access token")
-
-    return ChatGPTCredentialAuth(
-        credential_name=credential.credential_name,
-        access_token=access_token,
-        account_id=get_chatgpt_account_id(credential_values),
-        plan_label=get_chatgpt_plan_label(credential_values),
-        daily_snapshot=get_chatgpt_daily_quota_snapshot(credential.credential_info or {}),
-    )
+    return credential
 
 
 @router.delete(
