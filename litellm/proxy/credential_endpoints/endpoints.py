@@ -461,7 +461,7 @@ async def get_chatgpt_credential_quota_history(
     ],
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
     history_store: Annotated[ChatGPTQuotaHistoryReader | None, Depends(get_chatgpt_quota_history_store)],
-    days: Annotated[ChatGPTQuotaHistoryDays, Query()] = 30,
+    days: Annotated[ChatGPTQuotaHistoryDays, Query()] = ChatGPTQuotaHistoryDays.THIRTY,
 ) -> ChatGPTQuotaHistoryResponse:
     try:
         credential = _get_chatgpt_credential(credential_name)

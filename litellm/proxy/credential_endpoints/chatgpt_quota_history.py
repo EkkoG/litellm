@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
+from enum import IntEnum
 from itertools import groupby
 from typing import Literal, Protocol, TypedDict, runtime_checkable
 from zoneinfo import ZoneInfo
@@ -15,7 +16,12 @@ from litellm.proxy.credential_endpoints.chatgpt_subscription import (
 )
 
 CHATGPT_QUOTA_HISTORY_RETENTION_DAYS = 90
-ChatGPTQuotaHistoryDays = Literal[7, 30, 90]
+
+
+class ChatGPTQuotaHistoryDays(IntEnum):
+    SEVEN = 7
+    THIRTY = 30
+    NINETY = 90
 
 
 class ChatGPTQuotaHistoryResponse(BaseModel):

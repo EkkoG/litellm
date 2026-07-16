@@ -22342,17 +22342,18 @@ export interface components {
              */
             overwrite_existing: boolean;
         };
+        /**
+         * ChatGPTQuotaHistoryDays
+         * @enum {integer}
+         */
+        ChatGPTQuotaHistoryDays: 7 | 30 | 90;
         /** ChatGPTQuotaHistoryResponse */
         ChatGPTQuotaHistoryResponse: {
             /** Credential Name */
             credential_name: string;
             /** Current Date */
             current_date: string;
-            /**
-             * Days
-             * @enum {integer}
-             */
-            days: 7 | 30 | 90;
+            days: components["schemas"]["ChatGPTQuotaHistoryDays"];
             /** Snapshots */
             snapshots: components["schemas"]["ChatGPTDailyQuotaSnapshot"][];
             /** Timezone */
@@ -38414,7 +38415,7 @@ export interface operations {
     get_chatgpt_credential_quota_history_credentials__credential_name__chatgpt_quota_history_get: {
         parameters: {
             query?: {
-                days?: 7 | 30 | 90;
+                days?: components["schemas"]["ChatGPTQuotaHistoryDays"];
             };
             header?: never;
             path: {
