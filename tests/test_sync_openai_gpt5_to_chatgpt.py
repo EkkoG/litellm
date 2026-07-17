@@ -4,7 +4,7 @@ from pathlib import Path
 from scripts.sync_openai_gpt5_to_chatgpt import sync_file, sync_model_costs
 
 
-def test_sync_model_costs_copies_gpt5_families_and_preserves_chatgpt_fields():
+def test_sync_model_costs_copies_supported_families_and_preserves_chatgpt_fields():
     model_costs = {
         "gpt-5.4": {
             "litellm_provider": "openai",
@@ -19,6 +19,19 @@ def test_sync_model_costs_copies_gpt5_families_and_preserves_chatgpt_fields():
             "input_cost_per_token": 5e-6,
             "cache_read_input_token_cost": 5e-7,
         },
+        "gpt-image-2": {
+            "litellm_provider": "openai",
+            "mode": "image_generation",
+            "input_cost_per_image_token": 8e-6,
+            "output_cost_per_image_token": 3e-5,
+            "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+            "supports_vision": True,
+        },
+        "gpt-image-2-2026-04-21": {
+            "litellm_provider": "openai",
+            "mode": "image_generation",
+            "output_cost_per_image_token": 3e-5,
+        },
         "anthropic/gpt-5.5": {
             "litellm_provider": "anthropic",
             "input_cost_per_token": 99.0,
@@ -32,7 +45,12 @@ def test_sync_model_costs_copies_gpt5_families_and_preserves_chatgpt_fields():
 
     synced, changed_keys = sync_model_costs(model_costs)
 
-    assert changed_keys == ("chatgpt/gpt-5.4", "chatgpt/gpt-5.6-sol")
+    assert changed_keys == (
+        "chatgpt/gpt-5.4",
+        "chatgpt/gpt-5.6-sol",
+        "chatgpt/gpt-image-2",
+        "chatgpt/gpt-image-2-2026-04-21",
+    )
     assert synced["chatgpt/gpt-5.4"] == {
         "litellm_provider": "chatgpt",
         "mode": "responses",
@@ -47,6 +65,19 @@ def test_sync_model_costs_copies_gpt5_families_and_preserves_chatgpt_fields():
         "input_cost_per_token": 5e-6,
         "cache_read_input_token_cost": 5e-7,
         "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+    }
+    assert synced["chatgpt/gpt-image-2"] == {
+        "litellm_provider": "chatgpt",
+        "mode": "image_generation",
+        "input_cost_per_image_token": 8e-6,
+        "output_cost_per_image_token": 3e-5,
+        "supported_endpoints": ["/v1/images/generations", "/v1/images/edits"],
+        "supports_vision": True,
+    }
+    assert synced["chatgpt/gpt-image-2-2026-04-21"] == {
+        "litellm_provider": "chatgpt",
+        "mode": "image_generation",
+        "output_cost_per_image_token": 3e-5,
     }
     assert "chatgpt/anthropic/gpt-5.5" not in synced
 

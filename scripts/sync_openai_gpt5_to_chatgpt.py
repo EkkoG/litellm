@@ -17,7 +17,7 @@ DEFAULT_PATHS = (
     REPO_ROOT / "model_prices_and_context_window.json",
     REPO_ROOT / "litellm/model_prices_and_context_window_backup.json",
 )
-MODEL_PATTERN = re.compile(r"^gpt-5\.(?:4|5|6)(?:-|$)")
+MODEL_PATTERN = re.compile(r"^(?:gpt-5\.(?:4|5|6)|gpt-image-2)(?:-|$)")
 CHATGPT_ENDPOINTS = ("/v1/chat/completions", "/v1/responses")
 PRESERVED_TARGET_FIELDS = frozenset({"provider_specific_entry", "supported_openai_params"})
 logger = logging.getLogger(__name__)
@@ -42,19 +42,26 @@ def _source_models(model_costs: ModelCostMap) -> tuple[tuple[str, ModelEntry], .
 def _sync_entry(source: ModelEntry, existing: Optional[ModelEntry]) -> ModelEntry:
     existing_entry = existing or {}
     target_only_fields = {key: existing_entry[key] for key in PRESERVED_TARGET_FIELDS if key in existing_entry}
+    target_overrides = (
+        {"litellm_provider": "chatgpt"}
+        if source.get("mode") == "image_generation"
+        else {
+            "litellm_provider": "chatgpt",
+            "mode": "responses",
+            "supported_endpoints": list(CHATGPT_ENDPOINTS),
+        }
+    )
     return {
         **source,
         **target_only_fields,
-        "litellm_provider": "chatgpt",
-        "mode": "responses",
-        "supported_endpoints": list(CHATGPT_ENDPOINTS),
+        **target_overrides,
     }
 
 
 def sync_model_costs(model_costs: ModelCostMap) -> tuple[ModelCostMap, tuple[str, ...]]:
     sources = _source_models(model_costs)
     if not sources:
-        raise ValueError("No OpenAI GPT-5.4, GPT-5.5, or GPT-5.6 models found")
+        raise ValueError("No supported OpenAI GPT-5 or GPT Image models found")
 
     target_keys = tuple(f"chatgpt/{source_key}" for source_key, _ in sources)
     target_key_set = frozenset(target_keys)
@@ -100,7 +107,7 @@ def sync_file(path: Path, check: bool = False) -> tuple[str, ...]:
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sync OpenAI GPT-5.4, GPT-5.5, and GPT-5.6 model metadata to ChatGPT provider entries"
+        description="Sync supported OpenAI GPT-5 and GPT Image model metadata to ChatGPT provider entries"
     )
     parser.add_argument("paths", nargs="*", type=Path, help="Model cost JSON files to update")
     parser.add_argument("--check", action="store_true", help="Exit with status 1 when files need synchronization")
