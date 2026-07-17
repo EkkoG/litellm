@@ -569,6 +569,150 @@ def _make_empty_model_response():
     )
 
 
+def test_transform_response_handles_generic_incomplete_reasoning_and_empty_message():
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    handler = LiteLLMResponsesTransformationHandler()
+    raw_response = _make_empty_responses_api_response(model="k3")
+    raw_response.status = "incomplete"
+    raw_response.output = [
+        GenericResponseOutputItem(
+            type="reasoning",
+            id="rs_test_incomplete",
+            status="incomplete",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="The",
+                    annotations=[],
+                )
+            ],
+        ),
+        GenericResponseOutputItem(
+            type="message",
+            id="msg_test_incomplete",
+            status="incomplete",
+            role="assistant",
+            content=[
+                OutputText(
+                    type="output_text",
+                    text="",
+                    annotations=[],
+                )
+            ],
+        ),
+    ]
+
+    result = handler.transform_response(
+        model="k3",
+        raw_response=raw_response,
+        model_response=_make_empty_model_response(),
+        logging_obj=Mock(),
+        request_data={"model": "k3"},
+        messages=[{"role": "user", "content": "Continue"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].message.content == ""
+    assert result.choices[0].message.reasoning_content == "The"
+    assert result.choices[0].message.reasoning_items == [
+        {
+            "id": "rs_test_incomplete",
+            "type": "reasoning",
+            "encrypted_content": None,
+            "summary": [{"type": "summary_text", "text": "The"}],
+        }
+    ]
+
+
+def test_convert_response_output_to_choices_handles_generic_reasoning_only():
+    from litellm.types.responses.main import GenericResponseOutputItem, OutputText
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        output_items=[
+            GenericResponseOutputItem(
+                type="reasoning",
+                id="rs_test_reasoning_only",
+                status="incomplete",
+                role="assistant",
+                content=[
+                    OutputText(
+                        type="output_text",
+                        text="Thinking",
+                        annotations=[],
+                    )
+                ],
+            )
+        ]
+    )
+
+    assert len(choices) == 1
+    assert choices[0].finish_reason == "length"
+    assert choices[0].message.content == ""
+    assert choices[0].message.reasoning_content == "Thinking"
+
+
+def test_transform_response_maps_incomplete_sdk_output_to_length():
+    from openai.types.responses import ResponseOutputMessage, ResponseOutputText
+    from openai.types.responses.response_reasoning_item import ResponseReasoningItem
+
+    raw_response = _make_empty_responses_api_response(model="kimi-k2.5")
+    raw_response.status = "incomplete"
+    raw_response.output = [
+        ResponseReasoningItem(
+            id="rs_native_incomplete",
+            summary=[],
+            type="reasoning",
+            content=None,
+            encrypted_content=None,
+            status="incomplete",
+        ),
+        ResponseOutputMessage(
+            id="msg_native_incomplete",
+            content=[
+                ResponseOutputText(
+                    annotations=[],
+                    text="The",
+                    type="output_text",
+                    logprobs=[],
+                )
+            ],
+            role="assistant",
+            status="incomplete",
+            type="message",
+        ),
+    ]
+
+    result = LiteLLMResponsesTransformationHandler().transform_response(
+        model="kimi-k2.5",
+        raw_response=raw_response,
+        model_response=_make_empty_model_response(),
+        logging_obj=Mock(),
+        request_data={"model": "kimi-k2.5"},
+        messages=[{"role": "user", "content": "Continue"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].message.content == "The"
+    assert result.choices[0].message.reasoning_items == [
+        {
+            "id": "rs_native_incomplete",
+            "type": "reasoning",
+            "encrypted_content": None,
+            "summary": [],
+        }
+    ]
+
+
 def test_transform_response_recovers_empty_output_from_raw_sse():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
