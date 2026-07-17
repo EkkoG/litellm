@@ -104,3 +104,19 @@ Before implementing:
 - If you write 200 lines and it could be 50, rewrite it
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify
+
+## Gomo Release And Rollback
+
+When the user asks to release, publish, or deploy this LiteLLM fork to Gomo, run `scripts/release_gomo.sh`
+
+The release script reads the highest numeric tag from `hubsz.gomo.com/litellm-gomo/litellm`, increments it, builds and pushes both the numeric tag and `latest`, then deploys `latest` to `dabaoji@10.10.0.11`
+
+When the user asks to roll back without specifying a version, run `scripts/rollback_gomo.sh`. It defaults to the highest numeric registry tag minus one
+
+When the user specifies a rollback version, run `scripts/rollback_gomo.sh --version <version>`
+
+The rollback script validates that the numeric tag exists, pulls it on `10.10.0.11`, retags it as the server's local `latest`, and restarts the Compose deployment without changing the registry's `latest` tag
+
+An explicit user request to release or roll back authorizes running the corresponding production script. State which script and target version will be used, then execute it without reconstructing the Docker or SSH workflow manually
+
+Never use `scripts/test_release_gomo.sh` or `scripts/test_rollback_gomo.sh` for a real release or rollback
