@@ -221,9 +221,23 @@ async def test_sync_directory_failure_preserves_all_users() -> None:
 @pytest.mark.asyncio
 async def test_prisma_store_uses_json_filter_and_transaction() -> None:
     from prisma import Json
+    from prisma.models import LiteLLM_UserTable as PrismaUserTable
 
     prisma = MagicMock()
-    prisma.db.litellm_usertable.find_many = AsyncMock(return_value=(_user("alice"),))
+    prisma_user = PrismaUserTable.model_validate(
+        {
+            "user_id": "alice",
+            "teams": [],
+            "spend": 0.0,
+            "models": [],
+            "metadata": json.dumps({"auth_provider": "ldap", "identity_active": True}),
+            "allowed_cache_controls": [],
+            "policies": [],
+            "model_spend": "{}",
+            "model_max_budget": "{}",
+        }
+    )
+    prisma.db.litellm_usertable.find_many = AsyncMock(return_value=(prisma_user,))
     transaction = MagicMock()
     transaction.litellm_usertable.update = AsyncMock()
     prisma.db.tx.return_value = _TransactionContext(transaction)
