@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 from typing import Callable, Literal, Protocol, Sequence, cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from litellm._logging import verbose_proxy_logger
@@ -18,7 +18,7 @@ LDAP_USER_STATUS_SYNC_JOB_NAME = "ldap_user_status_sync_job"
 
 _METADATA_ADAPTER = TypeAdapter(dict[str, object])
 _ENTRY_VALUES_ADAPTER = TypeAdapter(tuple[object, ...])
-_LDAP_USERS_ADAPTER = TypeAdapter(tuple[LiteLLM_UserTable, ...])
+_RAW_LDAP_USERS_ADAPTER = TypeAdapter(tuple[object, ...])
 _LDAP_RESULT_ADAPTER = TypeAdapter(dict[str, object])
 
 
@@ -156,7 +156,8 @@ class PrismaLDAPUserStore:
         raw_users = await self._prisma_client.db.litellm_usertable.find_many(
             where={"metadata": {"path": ["auth_provider"], "equals": Json("ldap")}}
         )
-        return _LDAP_USERS_ADAPTER.validate_python(raw_users)
+        users = _RAW_LDAP_USERS_ADAPTER.validate_python(raw_users)
+        return tuple(_ldap_user_table(user) for user in users)
 
     async def update_metadata(self, updates: Sequence["_LDAPTransition"]) -> None:
         async with self._prisma_client.db.tx() as transaction:
@@ -173,6 +174,14 @@ def _metadata_dict(value: object) -> dict[str, object]:
     if isinstance(value, str):
         return _METADATA_ADAPTER.validate_json(value)
     return {}
+
+
+def _ldap_user_table(value: object) -> LiteLLM_UserTable:
+    if isinstance(value, LiteLLM_UserTable):
+        return value
+    if isinstance(value, BaseModel):
+        return LiteLLM_UserTable.model_validate(value.model_dump())
+    return LiteLLM_UserTable.model_validate(value)
 
 
 def _metadata_string(metadata: dict[str, object]) -> str:
