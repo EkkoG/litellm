@@ -25,6 +25,12 @@ describe("LDAPSettings", () => {
     render(<LDAPSettings />);
 
     expect(screen.getByText("Stable User ID Attribute")).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "For Active Directory Domain Services (AD DS), use objectGUID. For OpenLDAP, use entryUUID. If left blank, LiteLLM uses the LDAP DN, which can change when an entry is renamed or moved.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("objectGUID or entryUUID")).toBeInTheDocument();
     expect(screen.getByText("Allow Insecure LDAP")).toBeInTheDocument();
   });
 });
