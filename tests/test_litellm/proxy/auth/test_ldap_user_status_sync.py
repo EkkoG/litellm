@@ -221,9 +221,24 @@ async def test_sync_directory_failure_preserves_all_users() -> None:
 @pytest.mark.asyncio
 async def test_prisma_store_uses_json_filter_and_transaction() -> None:
     from prisma import Json
+    from prisma.models import LiteLLM_UserTable as PrismaUserTable
 
     prisma = MagicMock()
-    prisma.db.litellm_usertable.find_many = AsyncMock(return_value=(_user("alice"),))
+    prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=(
+            PrismaUserTable(
+                user_id="alice",
+                teams=[],
+                spend=0.0,
+                models=[],
+                metadata='{"auth_provider":"ldap","ldap_username":"alice"}',
+                allowed_cache_controls=[],
+                policies=[],
+                model_spend="{}",
+                model_max_budget="{}",
+            ),
+        )
+    )
     transaction = MagicMock()
     transaction.litellm_usertable.update = AsyncMock()
     prisma.db.tx.return_value = _TransactionContext(transaction)
@@ -238,6 +253,7 @@ async def test_prisma_store_uses_json_filter_and_transaction() -> None:
     assert isinstance(value, Json)
     assert value.data == "ldap"
     assert users[0].user_id == "alice"
+    assert users[0].metadata == {"auth_provider": "ldap", "ldap_username": "alice"}
     update_data = transaction.litellm_usertable.update.await_args.kwargs["data"]
     assert json.loads(update_data["metadata"])["identity_active"] is False
 
