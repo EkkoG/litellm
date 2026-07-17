@@ -254,6 +254,8 @@ async def _resolve_ldap_user_id(
     user_repository: UserRepository,
     directory_user: LDAPDirectoryUser,
 ) -> str:
+    from prisma import Json  # pyright: ignore[reportUnknownVariableType]  # generated Prisma JSON wrapper is untyped
+
     stable_user = await user_repository.table.find_unique(where={"user_id": directory_user.user_id})
     if stable_user is not None:
         return str(getattr(stable_user, "user_id", None) or stable_user["user_id"])
@@ -265,8 +267,8 @@ async def _resolve_ldap_user_id(
     metadata_user = await user_repository.table.find_first(
         where={
             "OR": [
-                {"metadata": {"path": ["ldap_principal_hash"], "equals": directory_user.principal_hash}},
-                {"metadata": {"path": ["ldap_dn"], "equals": directory_user.dn}},
+                {"metadata": {"path": ["ldap_principal_hash"], "equals": Json(directory_user.principal_hash)}},
+                {"metadata": {"path": ["ldap_dn"], "equals": Json(directory_user.dn)}},
             ]
         }
     )
