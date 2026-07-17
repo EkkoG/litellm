@@ -12,9 +12,11 @@ from litellm.proxy.auth.ldap_auth import (
     LDAPConfig,
     LDAPDirectoryUser,
     _authenticate_ldap_credentials,
+    _resolve_ldap_user_id,
     _sync_ldap_user,
     load_ldap_config,
 )
+from litellm.repositories.user_repository import UserRepository
 
 
 @pytest.mark.asyncio
@@ -234,6 +236,33 @@ async def test_sync_ldap_user_preserves_legacy_user_id_after_email_change():
     assert where == {"user_id": "ldap:old@example.com"}
     assert data["update"]["user_email"] == "new@example.com"
     assert sha256(b"directory-object-123").hexdigest() in data["update"]["metadata"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_ldap_user_id_serializes_metadata_filter_values_as_json():
+    from prisma import Json
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=[None, None])
+    mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=None)
+    directory_user = LDAPDirectoryUser(
+        username="alice",
+        dn="uid=alice,dc=example,dc=com",
+        email="alice@example.com",
+        display_name="Alice",
+    )
+
+    resolved_user_id = await _resolve_ldap_user_id(UserRepository(mock_prisma), directory_user)
+
+    where = mock_prisma.db.litellm_usertable.find_first.call_args.kwargs["where"]
+    principal_filter, dn_filter = where["OR"]
+    principal_value = principal_filter["metadata"]["equals"]
+    dn_value = dn_filter["metadata"]["equals"]
+    assert isinstance(principal_value, Json)
+    assert principal_value.data == directory_user.principal_hash
+    assert isinstance(dn_value, Json)
+    assert dn_value.data == directory_user.dn
+    assert resolved_user_id == directory_user.user_id
 
 
 def test_ldap_directory_user_id_is_based_on_stable_principal_not_email():
