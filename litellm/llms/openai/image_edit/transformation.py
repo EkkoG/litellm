@@ -38,6 +38,7 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
         """
         return [
             "image",
+            "images",
             "prompt",
             "background",
             "input_fidelity",
@@ -138,6 +139,9 @@ class OpenAIImageEditConfig(BaseImageEditConfig):
                     files_list.append(("mask", ("mask.png", _mask, mask_content_type)))
 
         return data_without_files, files_list
+
+    def use_multipart_form_data_for_request(self, data: dict) -> bool:
+        return "images" not in data
 
     def transform_image_edit_response(
         self,

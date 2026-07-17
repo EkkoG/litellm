@@ -130,6 +130,9 @@ class BaseImageEditConfig(ABC):
         """
         return True
 
+    def use_multipart_form_data_for_request(self, data: dict) -> bool:
+        return self.use_multipart_form_data()
+
     def get_error_class(
         self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
     ) -> BaseLLMException:

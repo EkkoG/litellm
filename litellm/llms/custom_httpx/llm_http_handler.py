@@ -6303,7 +6303,7 @@ class BaseLLMHTTPHandler:
 
         try:
             # Check if provider uses multipart/form-data or JSON
-            if image_edit_provider_config.use_multipart_form_data():
+            if image_edit_provider_config.use_multipart_form_data_for_request(data):
                 # Use form-data (OpenAI style)
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -6402,7 +6402,7 @@ class BaseLLMHTTPHandler:
 
         try:
             # Check if provider uses multipart/form-data or JSON
-            if image_edit_provider_config.use_multipart_form_data():
+            if image_edit_provider_config.use_multipart_form_data_for_request(data):
                 # Use form-data (OpenAI style)
                 response = await async_httpx_client.post(
                     url=api_base,

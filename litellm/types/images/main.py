@@ -1,8 +1,13 @@
-from typing import Any, Dict, List, Literal, Optional, Union
+from typing import Any, Dict, List, Literal, Optional
 
 from typing_extensions import TypedDict
 
 from litellm.types.utils import FileTypes
+
+
+class ImageEditImageReference(TypedDict, total=False):
+    file_id: str
+    image_url: str
 
 
 class ImageEditOptionalRequestParams(TypedDict, total=False):
@@ -13,6 +18,7 @@ class ImageEditOptionalRequestParams(TypedDict, total=False):
     """
 
     background: Optional[Literal["transparent", "opaque", "auto"]]
+    images: List[ImageEditImageReference]
     input_fidelity: Optional[Literal["high", "low"]]
     mask: Optional[str]
     n: Optional[int]

@@ -7,6 +7,7 @@ import litellm
 from litellm.images.utils import ImageEditRequestUtils
 from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
+from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.images.main import ImageEditOptionalRequestParams
 
 
@@ -40,6 +41,56 @@ class MockImageEditConfig(BaseImageEditConfig):
 
     def transform_image_edit_response(self, *args, **kwargs):
         return MagicMock()
+
+
+@pytest.mark.asyncio
+async def test_aimage_edit_accepts_json_image_references():
+    image_references = [
+        {"image_url": "data:image/png;base64,aW1hZ2U="},
+    ]
+
+    with (
+        patch(
+            "litellm.images.main.get_llm_provider",
+            return_value=("gpt-image-2", "openai", None, None),
+        ),
+        patch("litellm.images.main.image_edit", return_value=MagicMock()) as mock_image_edit,
+    ):
+        await litellm.aimage_edit(
+            model="gpt-image-2",
+            prompt="Edit this image",
+            images=image_references,
+        )
+
+    call_kwargs = mock_image_edit.call_args.kwargs
+    assert call_kwargs["image"] is None
+    assert call_kwargs["images"] == image_references
+
+
+def test_image_edit_passes_json_image_references_to_handler():
+    image_references = [
+        {"image_url": "data:image/png;base64,aW1hZ2U="},
+    ]
+
+    with (
+        patch(
+            "litellm.images.main.ProviderConfigManager.get_provider_image_edit_config",
+            return_value=OpenAIImageEditConfig(),
+        ),
+        patch(
+            "litellm.images.main.base_llm_http_handler.image_edit_handler",
+            return_value=MagicMock(),
+        ) as mock_handler,
+    ):
+        litellm.image_edit(
+            model="gpt-image-2",
+            prompt="Edit this image",
+            images=image_references,
+        )
+
+    call_kwargs = mock_handler.call_args.kwargs
+    assert call_kwargs["image"] == []
+    assert call_kwargs["image_edit_optional_request_params"]["images"] == image_references
 
 
 class TestImageEditRequestUtilsDropParams:
@@ -295,9 +346,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -326,9 +375,7 @@ class TestImageEditHandlerCredentialsForwarding:
             "vertex_ai_credentials": "/path/to/creds.json",
         }
 
-        with patch.object(
-            config, "_ensure_access_token", return_value=("token", "project")
-        ) as mock_ensure:
+        with patch.object(config, "_ensure_access_token", return_value=("token", "project")) as mock_ensure:
             config.validate_environment(
                 headers={},
                 model="test-model",
@@ -398,10 +445,6 @@ class TestImageEditHandlerCredentialsForwarding:
             params = list(sig.parameters.keys())
 
             assert "litellm_params" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing litellm_params parameter"
+                f"{config.__class__.__name__}.validate_environment missing litellm_params parameter"
             )
-            assert "api_base" in params, (
-                f"{config.__class__.__name__}.validate_environment "
-                "missing api_base parameter"
-            )
+            assert "api_base" in params, f"{config.__class__.__name__}.validate_environment missing api_base parameter"

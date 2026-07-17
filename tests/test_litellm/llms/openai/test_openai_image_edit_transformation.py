@@ -1,10 +1,12 @@
-from io import BufferedReader, BytesIO
-from typing import Dict
+import json
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
 
-from litellm import image_edit
 from litellm.images.utils import ImageEditRequestUtils
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.types.router import GenericLiteLLMParams
 
@@ -44,6 +46,43 @@ def test_transform_image_edit_request_basic(image_edit_config: OpenAIImageEditCo
     assert files[0][1][0] == "image.png"  # filename
     assert files[0][1][1] == image  # image data
     assert "image/png" in files[0][1][2]  # content type
+
+
+def test_image_edit_reference_request_uses_json(image_edit_config: OpenAIImageEditConfig):
+    image_references = [
+        {"image_url": "data:image/png;base64,aW1hZ2U="},
+        {"file_id": "file-image-reference"},
+    ]
+    captured_request = None
+
+    def capture_request(request: httpx.Request) -> httpx.Response:
+        nonlocal captured_request
+        captured_request = request
+        return httpx.Response(200, json={"created": 1, "data": []})
+
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(capture_request)))
+    try:
+        BaseLLMHTTPHandler().image_edit_handler(
+            model="gpt-image-2",
+            image=None,
+            prompt="Edit this image",
+            image_edit_provider_config=image_edit_config,
+            image_edit_optional_request_params={"images": image_references},
+            custom_llm_provider="openai",
+            litellm_params=GenericLiteLLMParams(
+                api_base="https://api.openai.com/v1",
+                api_key="test-key",
+            ),
+            logging_obj=MagicMock(),
+            timeout=30,
+            client=client,
+        )
+    finally:
+        client.close()
+
+    assert captured_request is not None
+    assert captured_request.headers["content-type"] == "application/json"
+    assert json.loads(captured_request.content)["images"] == image_references
 
 
 def test_transform_image_edit_request_with_mask(

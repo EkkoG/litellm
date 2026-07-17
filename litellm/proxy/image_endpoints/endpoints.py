@@ -280,6 +280,8 @@ async def image_edit_api(
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
     data = await _read_request_body(request=request)
+    if image is not None and data.get("images") is not None:
+        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'images'")
     image_files = await batch_to_bytesio(image)
     mask_files = await batch_to_bytesio(mask)
     if image_files:
