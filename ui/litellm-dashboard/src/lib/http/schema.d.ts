@@ -7287,6 +7287,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ldap/sync-user-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Sync Ldap User Status */
+        post: operations["sync_ldap_user_status_ldap_sync_user_status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/litellm/.well-known/litellm-ui-config": {
         parameters: {
             query?: never;
@@ -24948,6 +24965,11 @@ export interface components {
         /** LDAPConfig */
         LDAPConfig: {
             /**
+             * Ldap Access Filter
+             * @description Optional LDAP filter that eligible users must match, evaluated against the user entry
+             */
+            ldap_access_filter?: string | null;
+            /**
              * Ldap Admin Group Dn
              * @description LDAP group DN whose members should become LiteLLM proxy admins
              */
@@ -24998,6 +25020,13 @@ export interface components {
              */
             ldap_group_attribute: string;
             /**
+             * Ldap Missing User Action
+             * @description Action when a previously synchronized LDAP user no longer exists
+             * @default ignore
+             * @enum {string}
+             */
+            ldap_missing_user_action: "ignore" | "disable";
+            /**
              * Ldap Search Base
              * @description Optional search base. Defaults to base DN
              */
@@ -25008,6 +25037,36 @@ export interface components {
              * @default false
              */
             ldap_start_tls: boolean;
+            /**
+             * Ldap Sync Enabled
+             * @description Periodically synchronize LDAP user access status
+             * @default false
+             */
+            ldap_sync_enabled: boolean;
+            /**
+             * Ldap Sync Interval Seconds
+             * @description LDAP user status synchronization interval in seconds
+             * @default 300
+             */
+            ldap_sync_interval_seconds: number;
+            /**
+             * Ldap Sync Lock Ttl Seconds
+             * @description Redis lock lifetime for a single LDAP synchronization run
+             * @default 900
+             */
+            ldap_sync_lock_ttl_seconds: number;
+            /**
+             * Ldap Sync Max Deactivation Ratio
+             * @description Abort synchronization when the deactivation ratio exceeds this value
+             * @default 0.2
+             */
+            ldap_sync_max_deactivation_ratio: number;
+            /**
+             * Ldap Sync Run On Startup
+             * @description Run LDAP user status synchronization once when the proxy starts
+             * @default false
+             */
+            ldap_sync_run_on_startup: boolean;
             /**
              * Ldap Url
              * @description LDAP server URL, for example ldap://host:389
@@ -25044,6 +25103,14 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** LDAPUserStatusSyncRequest */
+        LDAPUserStatusSyncRequest: {
+            /**
+             * Dry Run
+             * @default true
+             */
+            dry_run: boolean;
         };
         /** LakeraCategoryThresholds */
         LakeraCategoryThresholds: {
@@ -43550,6 +43617,39 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    sync_ldap_user_status_ldap_sync_user_status_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LDAPUserStatusSyncRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

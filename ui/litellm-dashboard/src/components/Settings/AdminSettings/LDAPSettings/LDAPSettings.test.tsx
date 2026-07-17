@@ -32,5 +32,9 @@ describe("LDAPSettings", () => {
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText("objectGUID or entryUUID")).toBeInTheDocument();
     expect(screen.getByText("Allow Insecure LDAP")).toBeInTheDocument();
+    expect(screen.getByText("Access Filter")).toBeInTheDocument();
+    expect(screen.getByText("LDAP User Status Synchronization")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Dry Run Sync" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run Sync Now" })).toBeInTheDocument();
   });
 });

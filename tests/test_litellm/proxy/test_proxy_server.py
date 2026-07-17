@@ -812,6 +812,46 @@ async def test_initialize_chatgpt_daily_quota_snapshot_job_without_database():
 
 
 @pytest.mark.asyncio
+async def test_configure_ldap_user_status_sync_job_adds_and_removes_job(monkeypatch):
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.auth.ldap_auth import LDAPConfig
+    from litellm.proxy.auth.ldap_user_status_sync import LDAP_USER_STATUS_SYNC_JOB_NAME
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+
+    scheduler = AsyncIOScheduler()
+    prisma = MagicMock()
+    proxy_logging = MagicMock()
+    enabled_config = LDAPConfig(
+        ldap_enabled=True,
+        ldap_url="ldaps://ldap.example.com:636",
+        ldap_base_dn="dc=example,dc=com",
+        ldap_access_filter="(!(pwdAccountLockedTime=*))",
+        ldap_sync_enabled=True,
+        ldap_sync_interval_seconds=600,
+    )
+    load_config = AsyncMock(return_value=enabled_config)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr(
+        "litellm.proxy.auth.ldap_user_status_sync.load_ldap_config",
+        load_config,
+    )
+    monkeypatch.setattr("litellm.proxy.auth.ldap_auth.load_ldap_config", load_config)
+
+    await ProxyStartupEvent.configure_ldap_user_status_sync_job(scheduler=scheduler, run_startup=False)
+
+    job = scheduler.get_job(LDAP_USER_STATUS_SYNC_JOB_NAME)
+    assert job is not None
+    assert job.trigger.interval.total_seconds() == 600
+
+    load_config.return_value = enabled_config.model_copy(update={"ldap_sync_enabled": False})
+    await ProxyStartupEvent.configure_ldap_user_status_sync_job(scheduler=scheduler, run_startup=False)
+
+    assert scheduler.get_job(LDAP_USER_STATUS_SYNC_JOB_NAME) is None
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_hydrates_mcp_when_store_model_in_db_false(monkeypatch):
     """
     Regression (LIT-4128): MCP servers created via the UI are persisted to the DB

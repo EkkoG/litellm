@@ -1197,7 +1197,14 @@ async def test_proxy_admin_expired_key_from_cache():
 
 
 @pytest.mark.asyncio
-async def test_scim_deactivated_user_key_is_rejected():
+@pytest.mark.parametrize(
+    "metadata,expected_message",
+    [
+        ({"scim_active": False}, "deactivated via SCIM"),
+        ({"identity_active": False}, "inactive external identity"),
+    ],
+)
+async def test_deactivated_user_key_is_rejected(metadata, expected_message):
     """A virtual key whose owning user has metadata.scim_active=False must be
     rejected by the auth flow (defense in depth on top of key-level blocking).
     """
@@ -1217,7 +1224,7 @@ async def test_scim_deactivated_user_key_is_rejected():
     )
     deactivated_user = LiteLLM_UserTable(
         user_id="scim-disabled-user",
-        metadata={"scim_active": False},
+        metadata=metadata,
     )
 
     mock_cache = AsyncMock()
@@ -1283,7 +1290,7 @@ async def test_scim_deactivated_user_key_is_rejected():
                     request_data={},
                 )
 
-        assert "deactivated via SCIM" in str(exc_info.value.message)
+        assert expected_message in str(exc_info.value.message)
     finally:
         for attr, val in _original_values.items():
             setattr(_proxy_server_mod, attr, val)
