@@ -20587,6 +20587,36 @@
         "max_tokens": 8191,
         "mode": "embedding"
     },
+    "chatgpt/gpt-image-2": {
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "chatgpt",
+        "mode": "image_generation",
+        "output_cost_per_token": 1e-05,
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true
+    },
+    "chatgpt/gpt-image-2-2026-04-21": {
+        "cache_read_input_token_cost": 1.25e-06,
+        "input_cost_per_token": 5e-06,
+        "litellm_provider": "chatgpt",
+        "mode": "image_generation",
+        "output_cost_per_token": 1e-05,
+        "input_cost_per_image_token": 8e-06,
+        "output_cost_per_image_token": 3e-05,
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supports_vision": true,
+        "supports_pdf_input": true
+    },
     "chatgpt/gpt-5.6": {
         "cache_creation_input_token_cost": 6.25e-06,
         "cache_creation_input_token_cost_above_272k_tokens": 1.25e-05,
