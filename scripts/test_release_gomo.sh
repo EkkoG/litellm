@@ -59,6 +59,21 @@ TMPDIR="${TMP_DIR}" \
 
 grep -Fq -- '-v latest,55' "${BUILD_LOG}"
 
+printf '' > "${BUILD_LOG}"
+printf '' > "${SSH_LOG}"
+
+PATH="${TMP_DIR}:${PATH}" \
+BUILD_SCRIPT="${BUILD_SCRIPT}" \
+SSH_BIN="${SSH_SCRIPT}" \
+DOCKER_CONFIG="${DOCKER_CONFIG_DIR}" \
+CURL_BIN="${CURL_SCRIPT}" \
+TMPDIR="${TMP_DIR}" \
+"${SCRIPT}" --deploy-only
+
+[[ ! -s "${BUILD_LOG}" ]]
+grep -Fq -- '/opt/homebrew/bin/docker pull hubsz.gomo.com/litellm-gomo/litellm:latest' "${SSH_LOG}"
+grep -Fq -- '/opt/homebrew/bin/docker compose up -d' "${SSH_LOG}"
+
 FAIL_SSH_LOG="${TMP_DIR}/fail-ssh.log"
 printf '%s\n' '{"tags":["latest","60"]}' > "${TAGS_FILE}"
 

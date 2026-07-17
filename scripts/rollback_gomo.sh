@@ -9,6 +9,7 @@ IMAGE_REPOSITORY="${IMAGE_REPOSITORY:-hubsz.gomo.com/litellm-gomo/litellm}"
 DEPLOY_TARGET="${DEPLOY_TARGET:-dabaoji@10.10.0.11}"
 REMOTE_COMPOSE_DIR="${REMOTE_COMPOSE_DIR:-/Volumes/ExtremeSSD/gomo-services}"
 SSH_BIN="${SSH_BIN:-ssh}"
+REMOTE_DOCKER_BIN="${REMOTE_DOCKER_BIN:-/opt/homebrew/bin/docker}"
 LOCK_DIR="${TMPDIR:-/tmp}/litellm-gomo-deploy.lock"
 requested_version=""
 
@@ -84,11 +85,15 @@ fi
 target_image="${IMAGE_REPOSITORY}:${target_version}"
 latest_image="${IMAGE_REPOSITORY}:latest"
 printf -v remote_command \
-  'cd %q && docker pull %q && docker tag %q %q && docker compose up -d --pull never && docker compose ps' \
+  'cd %q && %q pull %q && %q tag %q %q && %q compose up -d --pull never && %q compose ps' \
   "${REMOTE_COMPOSE_DIR}" \
+  "${REMOTE_DOCKER_BIN}" \
   "${target_image}" \
+  "${REMOTE_DOCKER_BIN}" \
   "${target_image}" \
-  "${latest_image}"
+  "${latest_image}" \
+  "${REMOTE_DOCKER_BIN}" \
+  "${REMOTE_DOCKER_BIN}"
 
 echo "Latest numeric registry tag: ${latest_version}"
 echo "Rolling back ${DEPLOY_TARGET} to ${target_image}"
