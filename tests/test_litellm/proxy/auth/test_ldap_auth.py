@@ -1,13 +1,13 @@
 import sys
 import types
 from hashlib import sha256
+from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 import litellm.proxy.auth.ldap_auth as ldap_auth
-from litellm.proxy._types import LitellmUserRoles
-from litellm.proxy._types import ProxyException
+from litellm.proxy._types import LitellmUserRoles, ProxyException
 from litellm.proxy.auth.ldap_auth import (
     LDAPConfig,
     LDAPDirectoryUser,
@@ -17,6 +17,75 @@ from litellm.proxy.auth.ldap_auth import (
     load_ldap_config,
 )
 from litellm.repositories.user_repository import UserRepository
+
+
+class _TrackedLDAPConnection(Protocol):
+    unbound: bool
+
+
+def _ldap_connection_test_config() -> LDAPConfig:
+    return LDAPConfig(
+        ldap_enabled=True,
+        ldap_url="ldap://ldap.example.com:389",
+        ldap_base_dn="dc=example,dc=com",
+        ldap_bind_dn="cn=admin,dc=example,dc=com",
+        ldap_bind_password="bind-password",
+        ldap_allow_insecure=True,
+    )
+
+
+def _patch_ldap_connection_results(
+    monkeypatch: pytest.MonkeyPatch,
+    directory_bind_result: bool | BaseException = True,
+    user_bind_result: bool | BaseException = True,
+) -> list[_TrackedLDAPConnection]:
+    connections: list[_TrackedLDAPConnection] = []
+    user_dn = "uid=alice,ou=People,dc=example,dc=com"
+
+    class FakeAttribute:
+        def __init__(self, values: list[str]) -> None:
+            self.values = values
+            self.value: str | None = values[0] if values else None
+
+    class FakeEntry:
+        entry_dn = user_dn
+        mail = FakeAttribute(["alice@example.com"])
+        displayName = FakeAttribute(["Alice"])
+        memberOf = FakeAttribute([])
+
+    class FakeConnection:
+        def __init__(
+            self,
+            server: object,
+            user: str | None = None,
+            password: str | None = None,
+            auto_bind: bool = False,
+        ) -> None:
+            self.user = user
+            self.entries: list[FakeEntry] = []
+            self.unbound = False
+            connections.append(self)
+
+        def bind(self) -> bool:
+            result = user_bind_result if self.user == user_dn else directory_bind_result
+            if isinstance(result, BaseException):
+                raise result
+            return result
+
+        def search(self, **kwargs: object) -> bool:
+            self.entries = [FakeEntry()]
+            return True
+
+        def unbind(self) -> bool:
+            self.unbound = True
+            return True
+
+    def fake_server(*args: object, **kwargs: object) -> object:
+        return object()
+
+    monkeypatch.setattr("ldap3.Server", fake_server)
+    monkeypatch.setattr("ldap3.Connection", FakeConnection)
+    return connections
 
 
 @pytest.mark.asyncio
@@ -325,6 +394,9 @@ def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(mon
         def unbind(self):
             return True
 
+    class FakeLDAPException(Exception):
+        pass
+
     ldap3_module = types.ModuleType("ldap3")
     ldap3_module.NONE = "NONE"
     ldap3_module.SUBTREE = "SUBTREE"
@@ -334,10 +406,15 @@ def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(mon
     ldap3_utils_module = types.ModuleType("ldap3.utils")
     ldap3_conv_module = types.ModuleType("ldap3.utils.conv")
     ldap3_conv_module.escape_filter_chars = lambda value: value.replace("*", "\\2a").replace("(", "\\28")
+    ldap3_core_module = types.ModuleType("ldap3.core")
+    ldap3_exceptions_module = types.ModuleType("ldap3.core.exceptions")
+    ldap3_exceptions_module.LDAPException = FakeLDAPException
 
     monkeypatch.setitem(sys.modules, "ldap3", ldap3_module)
     monkeypatch.setitem(sys.modules, "ldap3.utils", ldap3_utils_module)
     monkeypatch.setitem(sys.modules, "ldap3.utils.conv", ldap3_conv_module)
+    monkeypatch.setitem(sys.modules, "ldap3.core", ldap3_core_module)
+    monkeypatch.setitem(sys.modules, "ldap3.core.exceptions", ldap3_exceptions_module)
 
     config = LDAPConfig(
         ldap_enabled=True,
@@ -361,6 +438,75 @@ def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(mon
     assert captured["search"]["search_base"] == "ou=People,dc=example,dc=com"
     assert captured["search"]["search_filter"] == r"(uid=ali\2a\28ce)"
     assert set(captured["search"]["attributes"]) == {"mail", "displayName", "memberOf"}
+
+
+def test_authenticate_ldap_credentials_maps_directory_connection_error_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ldap3.core.exceptions import (  # pyright: ignore[reportMissingModuleSource]  # ldap3 is untyped
+        LDAPSessionTerminatedByServerError,
+    )
+
+    connections = _patch_ldap_connection_results(
+        monkeypatch,
+        directory_bind_result=LDAPSessionTerminatedByServerError("session terminated by server"),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _authenticate_ldap_credentials(_ldap_connection_test_config(), "alice", "ldap-password")
+
+    assert exc_info.value.code == "503"
+    assert exc_info.value.param == "ldap_connection"
+    assert exc_info.value.message == "LDAP directory service is temporarily unavailable."
+    assert len(connections) == 1
+    assert connections[0].unbound is True
+
+
+def test_authenticate_ldap_credentials_maps_service_account_rejection_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connections = _patch_ldap_connection_results(monkeypatch, directory_bind_result=False)
+
+    with pytest.raises(ProxyException) as exc_info:
+        _authenticate_ldap_credentials(_ldap_connection_test_config(), "alice", "ldap-password")
+
+    assert exc_info.value.code == "503"
+    assert exc_info.value.param == "ldap_bind_dn"
+    assert len(connections) == 1
+    assert connections[0].unbound is True
+
+
+def test_authenticate_ldap_credentials_maps_user_connection_error_to_503(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ldap3.core.exceptions import (  # pyright: ignore[reportMissingModuleSource]  # ldap3 is untyped
+        LDAPSessionTerminatedByServerError,
+    )
+
+    connections = _patch_ldap_connection_results(
+        monkeypatch,
+        user_bind_result=LDAPSessionTerminatedByServerError("session terminated by server"),
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        _authenticate_ldap_credentials(_ldap_connection_test_config(), "alice", "ldap-password")
+
+    assert exc_info.value.code == "503"
+    assert exc_info.value.param == "ldap_connection"
+    assert len(connections) == 2
+    assert all(connection.unbound for connection in connections)
+
+
+def test_authenticate_ldap_credentials_unbinds_after_invalid_user_password(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connections = _patch_ldap_connection_results(monkeypatch, user_bind_result=False)
+
+    result = _authenticate_ldap_credentials(_ldap_connection_test_config(), "alice", "wrong-password")
+
+    assert result is None
+    assert len(connections) == 2
+    assert all(connection.unbound for connection in connections)
 
 
 def test_authenticate_ldap_credentials_rejects_plaintext_bind_by_default():

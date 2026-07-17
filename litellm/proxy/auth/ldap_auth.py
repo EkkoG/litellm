@@ -2,11 +2,13 @@ import json
 import os
 from dataclasses import dataclass, field
 from hashlib import sha256
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Protocol
+from urllib.parse import urlsplit
 
 from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
+from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyErrorTypes, ProxyException
 from litellm.proxy.management_helpers.utils import get_new_internal_user_defaults
 from litellm.proxy.utils import PrismaClient
@@ -16,6 +18,25 @@ from litellm.types.utils import LiteLLMPydanticObjectBase
 
 LDAP_SETTINGS_PARAM_NAME = "ldap_settings"
 LDAP_SENSITIVE_FIELDS = {"ldap_bind_password"}
+
+
+class _LDAPConnection(Protocol):
+    def unbind(self) -> object: ...
+
+
+def _ldap_service_unavailable_error(stage: str, ldap_url: str, error: BaseException) -> ProxyException:
+    try:
+        parsed_url = urlsplit(ldap_url if "://" in ldap_url else f"ldap://{ldap_url}")
+        target = parsed_url.hostname or "configured LDAP server"
+    except ValueError:
+        target = "configured LDAP server"
+    verbose_proxy_logger.warning("LDAP %s connection failed for %s: %s", stage, target, type(error).__name__)
+    return ProxyException(
+        message="LDAP directory service is temporarily unavailable.",
+        type=ProxyErrorTypes.auth_error,
+        param="ldap_connection",
+        code=503,
+    )
 
 
 class LDAPConfig(LiteLLMPydanticObjectBase):
@@ -170,6 +191,9 @@ def _authenticate_ldap_credentials(
         )
     try:
         from ldap3 import NONE, SUBTREE, Connection, Server
+        from ldap3.core.exceptions import (
+            LDAPException,  # pyright: ignore[reportMissingModuleSource]  # ldap3 is untyped
+        )
         from ldap3.utils.conv import escape_filter_chars
     except ImportError as e:
         raise ProxyException(
@@ -178,6 +202,12 @@ def _authenticate_ldap_credentials(
             param="ldap3",
             code=500,
         ) from e
+
+    def safe_unbind(connection: _LDAPConnection, stage: str) -> None:
+        try:
+            connection.unbind()
+        except LDAPException as e:
+            verbose_proxy_logger.debug("LDAP %s connection cleanup failed: %s", stage, type(e).__name__)
 
     if not config.ldap_url or not config.ldap_base_dn:
         return None
@@ -189,50 +219,72 @@ def _authenticate_ldap_credentials(
         password=config.ldap_bind_password,
         auto_bind=False,
     )
-    if config.ldap_start_tls and not bind_conn.start_tls():
-        return None
-    if not bind_conn.bind():
-        return None
+    try:
+        if config.ldap_start_tls and not bind_conn.start_tls():
+            raise ProxyException(
+                message="LDAP directory connection could not establish StartTLS.",
+                type=ProxyErrorTypes.auth_error,
+                param="ldap_start_tls",
+                code=503,
+            )
+        if not bind_conn.bind():
+            raise ProxyException(
+                message="LDAP directory service account authentication failed.",
+                type=ProxyErrorTypes.auth_error,
+                param="ldap_bind_dn",
+                code=503,
+            )
 
-    escaped_username = escape_filter_chars(username)
-    search_filter = config.ldap_user_search_filter.replace("{username}", escaped_username)
-    search_base = config.ldap_search_base or config.ldap_base_dn
-    attributes = list(
-        {
-            config.ldap_email_attribute,
-            config.ldap_display_name_attribute,
-            config.ldap_group_attribute,
-            *([config.ldap_user_id_attribute] if config.ldap_user_id_attribute else []),
-        }
-    )
+        escaped_username = escape_filter_chars(username)
+        search_filter = config.ldap_user_search_filter.replace("{username}", escaped_username)
+        search_base = config.ldap_search_base or config.ldap_base_dn
+        attributes = list(
+            {
+                config.ldap_email_attribute,
+                config.ldap_display_name_attribute,
+                config.ldap_group_attribute,
+                *([config.ldap_user_id_attribute] if config.ldap_user_id_attribute else []),
+            }
+        )
 
-    search_ok = bind_conn.search(
-        search_base=search_base,
-        search_filter=search_filter,
-        search_scope=SUBTREE,
-        attributes=attributes,
-        size_limit=1,
-    )
-    if not search_ok or not bind_conn.entries:
-        bind_conn.unbind()
-        return None
+        search_ok = bind_conn.search(
+            search_base=search_base,
+            search_filter=search_filter,
+            search_scope=SUBTREE,
+            attributes=attributes,
+            size_limit=1,
+        )
+        if not search_ok or not bind_conn.entries:
+            return None
 
-    entry = bind_conn.entries[0]
-    user_dn = str(entry.entry_dn)
-    email = _entry_first_value(entry, config.ldap_email_attribute)
-    display_name = _entry_first_value(entry, config.ldap_display_name_attribute)
-    groups = _entry_values(entry, config.ldap_group_attribute)
-    principal_id = (
-        _entry_first_value(entry, config.ldap_user_id_attribute) if config.ldap_user_id_attribute else user_dn
-    )
-    bind_conn.unbind()
+        entry = bind_conn.entries[0]
+        user_dn = str(entry.entry_dn)
+        email = _entry_first_value(entry, config.ldap_email_attribute)
+        display_name = _entry_first_value(entry, config.ldap_display_name_attribute)
+        groups = _entry_values(entry, config.ldap_group_attribute)
+        principal_id = (
+            _entry_first_value(entry, config.ldap_user_id_attribute) if config.ldap_user_id_attribute else user_dn
+        )
+    except LDAPException as e:
+        raise _ldap_service_unavailable_error("directory lookup", config.ldap_url, e) from e
+    finally:
+        safe_unbind(bind_conn, "directory lookup")
 
     user_conn = Connection(server, user=user_dn, password=password, auto_bind=False)
-    if config.ldap_start_tls and not user_conn.start_tls():
-        return None
-    if not user_conn.bind():
-        return None
-    user_conn.unbind()
+    try:
+        if config.ldap_start_tls and not user_conn.start_tls():
+            raise ProxyException(
+                message="LDAP user connection could not establish StartTLS.",
+                type=ProxyErrorTypes.auth_error,
+                param="ldap_start_tls",
+                code=503,
+            )
+        if not user_conn.bind():
+            return None
+    except LDAPException as e:
+        raise _ldap_service_unavailable_error("user authentication", config.ldap_url, e) from e
+    finally:
+        safe_unbind(user_conn, "user authentication")
 
     user_role = LitellmUserRoles.INTERNAL_USER
     normalized_groups = frozenset(group.strip().casefold() for group in groups)
