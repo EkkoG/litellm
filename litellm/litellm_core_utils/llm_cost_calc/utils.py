@@ -1165,7 +1165,10 @@ class CostCalculatorUtils:
                 model=model,
                 image_response=completion_response,
             )
-        elif custom_llm_provider == litellm.LlmProviders.OPENAI.value:
+        elif custom_llm_provider in (
+            litellm.LlmProviders.OPENAI.value,
+            litellm.LlmProviders.CHATGPT.value,
+        ):
             # gpt-image models use token-based pricing.
             model_lower = model.lower()
             if "gpt-image" in model_lower:

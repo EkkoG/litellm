@@ -260,6 +260,35 @@ class TestGPTImageCostRouting:
         expected_cost = 0.0005 + 0.15
         assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
 
+    def test_chatgpt_gpt_image_2_routes_to_token_calculator(self):
+        from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
+
+        usage = ImageUsage(
+            input_tokens=286,
+            output_tokens=2058,
+            total_tokens=2344,
+            input_tokens_details=ImageUsageInputTokensDetails(
+                text_tokens=286,
+                image_tokens=0,
+            ),
+        )
+
+        image_response = ImageResponse(
+            created=1234567890,
+            data=[ImageObject(url="http://example.com/image.jpg")],
+        )
+        image_response.usage = usage
+
+        cost = CostCalculatorUtils.route_image_generation_cost_calculator(
+            model="gpt-image-2",
+            completion_response=image_response,
+            custom_llm_provider="chatgpt",
+            call_type="aimage_generation",
+        )
+
+        expected_cost = 286 * 5e-6 + 2058 * 3e-5
+        assert abs(cost - expected_cost) < 1e-6, f"Expected {expected_cost}, got {cost}"
+
     def test_openai_dalle_routes_to_pixel_calculator(self):
         """Test that OpenAI DALL-E still routes to pixel-based calculator"""
         from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
