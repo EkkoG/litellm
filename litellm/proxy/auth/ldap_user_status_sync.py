@@ -18,7 +18,6 @@ LDAP_USER_STATUS_SYNC_JOB_NAME = "ldap_user_status_sync_job"
 
 _METADATA_ADAPTER = TypeAdapter(dict[str, object])
 _ENTRY_VALUES_ADAPTER = TypeAdapter(tuple[object, ...])
-_LDAP_USERS_ADAPTER = TypeAdapter(tuple[LiteLLM_UserTable, ...])
 _LDAP_RESULT_ADAPTER = TypeAdapter(dict[str, object])
 
 
@@ -124,8 +123,13 @@ class LDAPUserStore(Protocol):
     async def update_metadata(self, updates: Sequence["_LDAPTransition"]) -> None: ...
 
 
+class _PrismaUserRow(Protocol):
+    user_id: str
+    metadata: object
+
+
 class _PrismaUserTable(Protocol):
-    async def find_many(self, *, where: dict[str, object]) -> object: ...
+    async def find_many(self, *, where: dict[str, object]) -> Sequence[_PrismaUserRow]: ...
 
     async def update(self, *, where: dict[str, str], data: dict[str, str]) -> object: ...
 
@@ -156,7 +160,9 @@ class PrismaLDAPUserStore:
         raw_users = await self._prisma_client.db.litellm_usertable.find_many(
             where={"metadata": {"path": ["auth_provider"], "equals": Json("ldap")}}
         )
-        return _LDAP_USERS_ADAPTER.validate_python(raw_users)
+        return tuple(
+            LiteLLM_UserTable(user_id=user.user_id, metadata=_metadata_dict(user.metadata)) for user in raw_users
+        )
 
     async def update_metadata(self, updates: Sequence["_LDAPTransition"]) -> None:
         async with self._prisma_client.db.tx() as transaction:
