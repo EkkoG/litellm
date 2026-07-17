@@ -115,9 +115,9 @@ export default function LDAPSettings() {
             <Form.Item
               name="ldap_user_id_attribute"
               label="Stable User ID Attribute"
-              extra="Use an immutable value such as objectGUID or entryUUID. Defaults to the LDAP DN."
+              extra="For Active Directory Domain Services (AD DS), use objectGUID. For OpenLDAP, use entryUUID. If left blank, LiteLLM uses the LDAP DN, which can change when an entry is renamed or moved."
             >
-              <Input placeholder="objectGUID" />
+              <Input placeholder="objectGUID or entryUUID" />
             </Form.Item>
             <Form.Item name="ldap_email_attribute" label="Email Attribute">
               <Input />
