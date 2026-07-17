@@ -232,6 +232,7 @@ LLM_CONFIG_NAMES = (
     "AzureOpenAIResponsesAPIConfig",
     "AzureOpenAIOSeriesResponsesAPIConfig",
     "XAIResponsesAPIConfig",
+    "MoonshotResponsesAPIConfig",
     "LiteLLMProxyResponsesAPIConfig",
     "HostedVLLMResponsesAPIConfig",
     "VolcEngineResponsesAPIConfig",
@@ -938,6 +939,10 @@ _LLM_CONFIGS_IMPORT_MAP = {
     "XAIResponsesAPIConfig": (
         ".llms.xai.responses.transformation",
         "XAIResponsesAPIConfig",
+    ),
+    "MoonshotResponsesAPIConfig": (
+        ".llms.moonshot.responses.transformation",
+        "MoonshotResponsesAPIConfig",
     ),
     "LiteLLMProxyResponsesAPIConfig": (
         ".llms.litellm_proxy.responses.transformation",

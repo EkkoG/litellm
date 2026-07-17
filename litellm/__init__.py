@@ -1740,6 +1740,9 @@ if TYPE_CHECKING:
     from .llms.xai.responses.transformation import (
         XAIResponsesAPIConfig as XAIResponsesAPIConfig,
     )
+    from .llms.moonshot.responses.transformation import (
+        MoonshotResponsesAPIConfig as MoonshotResponsesAPIConfig,
+    )
     from .llms.litellm_proxy.responses.transformation import (
         LiteLLMProxyResponsesAPIConfig as LiteLLMProxyResponsesAPIConfig,
     )
