@@ -735,6 +735,9 @@ def image_edit(
     """
     local_vars = locals()
     try:
+        if image is not None and kwargs.get("images") is not None:
+            raise ValueError("Cannot specify both 'image' and 'images'")
+
         openai_params = [
             "user",
             "request_timeout",
@@ -952,9 +955,9 @@ def image_edit(
 
 @client
 async def aimage_edit(
-    image: Union[FileTypes, List[FileTypes]],
-    model: str,
-    prompt: str,
+    image: Union[FileTypes, List[FileTypes]] | None = None,
+    model: str | None = None,
+    prompt: str | None = None,
     mask: Optional[str] = None,
     n: Optional[int] = None,
     quality: Optional[Union[str, ImageGenerationRequestQuality]] = None,
@@ -985,21 +988,22 @@ async def aimage_edit(
     try:
         loop = asyncio.get_event_loop()
         kwargs["async_call"] = True
+        resolved_model = model or DEFAULT_IMAGE_ENDPOINT_MODEL
 
         # get custom llm provider so we can use this for mapping exceptions
         if custom_llm_provider is None:
             _, custom_llm_provider, _, _ = litellm.get_llm_provider(
-                model=model, api_base=local_vars.get("base_url", None)
+                model=resolved_model, api_base=local_vars.get("base_url", None)
             )
 
-        images = image if isinstance(image, list) else [image]
+        images = image if isinstance(image, list) else ([image] if image is not None else None)
 
         func = partial(
             image_edit,
             image=images,
             prompt=prompt,
             mask=mask,
-            model=model,
+            model=resolved_model,
             n=n,
             quality=quality,
             response_format=response_format,
