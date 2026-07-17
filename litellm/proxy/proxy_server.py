@@ -8248,6 +8248,8 @@ class ProxyStartupEvent:
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
+        await cls.configure_ldap_user_status_sync_job(scheduler=scheduler, run_startup=True)
+
         ### SPEND LOG CLEANUP ###
         if general_settings.get("maximum_spend_logs_retention_period") is not None:
             spend_log_cleanup = SpendLogCleanup()
@@ -8354,6 +8356,61 @@ class ProxyStartupEvent:
             f"APScheduler started with memory leak prevention settings: "
             f"removed jitter, increased intervals, misfire_grace_time={APSCHEDULER_MISFIRE_GRACE_TIME}"
         )
+
+    @classmethod
+    async def configure_ldap_user_status_sync_job(
+        cls,
+        scheduler: AsyncIOScheduler,
+        run_startup: bool,
+    ) -> None:
+        global prisma_client
+        global proxy_logging_obj
+        global user_api_key_cache
+
+        from litellm.proxy.auth.ldap_auth import is_ldap_config_enabled, load_ldap_config
+        from litellm.proxy.auth.ldap_user_status_sync import (
+            LDAP_USER_STATUS_SYNC_JOB_NAME,
+            LDAPUserStatusSyncManager,
+        )
+
+        existing_job = scheduler.get_job(LDAP_USER_STATUS_SYNC_JOB_NAME)
+        if prisma_client is None:
+            if existing_job is not None:
+                scheduler.remove_job(LDAP_USER_STATUS_SYNC_JOB_NAME)
+            return
+        try:
+            config = await load_ldap_config(prisma_client)
+        except Exception as error:  # noqa: BLE001  # scheduler setup must not fail proxy startup on config DB errors
+            verbose_proxy_logger.warning("Failed to load LDAP user status synchronization settings: %s", error)
+            if existing_job is not None:
+                scheduler.remove_job(LDAP_USER_STATUS_SYNC_JOB_NAME)
+            return
+        if not (config.ldap_sync_enabled and config.ldap_access_filter and is_ldap_config_enabled(config)):
+            if existing_job is not None:
+                scheduler.remove_job(LDAP_USER_STATUS_SYNC_JOB_NAME)
+            return
+
+        manager = LDAPUserStatusSyncManager(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+        )
+        scheduler.add_job(
+            manager.run_scheduled_sync,
+            "interval",
+            seconds=config.ldap_sync_interval_seconds,
+            id=LDAP_USER_STATUS_SYNC_JOB_NAME,
+            replace_existing=True,
+            coalesce=True,
+            max_instances=1,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+        )
+        verbose_proxy_logger.info(
+            "LDAP user status synchronization scheduled every %d seconds",
+            config.ldap_sync_interval_seconds,
+        )
+        if run_startup and config.ldap_sync_run_on_startup:
+            await manager.run_startup_sync()
 
     @classmethod
     async def _initialize_spend_tracking_background_jobs(cls, scheduler: AsyncIOScheduler):

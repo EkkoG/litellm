@@ -9,7 +9,7 @@ sys.path.insert(
     0, os.path.abspath("../../..")
 )  # Adds the parent directory to the system path
 
-from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles
+from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
 from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import user_api_key_auth
 from litellm.types.proxy.management_endpoints.ui_sso import (
@@ -655,6 +655,37 @@ class TestProxySettingEndpoints:
         response = client.request(method=method, url=path, json={} if method == "patch" else None)
 
         assert response.status_code == 403
+
+    def test_sync_ldap_user_status_runs_as_proxy_admin(self, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+
+        from litellm.proxy.auth.ldap_user_status_sync import LDAPUserStatusSyncManager, LDAPUserStatusSyncResult
+        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+        async def admin_auth():
+            return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        client.app.dependency_overrides[user_api_key_auth] = admin_auth
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        monkeypatch.setattr("litellm.proxy.proxy_server.create_config_audit_log", AsyncMock())
+        run_sync = AsyncMock(
+            return_value=LDAPUserStatusSyncResult(
+                dry_run=True,
+                trigger="manual",
+                scanned=3,
+                would_deactivate=1,
+            )
+        )
+        monkeypatch.setattr(LDAPUserStatusSyncManager, "run", run_sync)
+        try:
+            response = client.post("/ldap/sync-user-status", json={"dry_run": True})
+        finally:
+            client.app.dependency_overrides.pop(user_api_key_auth, None)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["would_deactivate"] == 1
+        run_sync.assert_awaited_once_with(dry_run=True, trigger="manual")
+
     def test_update_sso_settings(self, mock_proxy_config, mock_auth, monkeypatch):
         """Test updating the SSO settings to the dedicated database table"""
         import json

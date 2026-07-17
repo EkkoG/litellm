@@ -4,7 +4,7 @@ import json
 import os
 from collections import Counter
 from collections.abc import Mapping
-from typing import Any
+from typing import Annotated, Any
 from urllib.parse import urlparse
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
@@ -121,6 +121,10 @@ class LDAPSettingsResponse(SettingsResponse):
     """Response model for LDAP settings"""
 
     pass
+
+
+class LDAPUserStatusSyncRequest(BaseModel):
+    dry_run: bool = True
 
 
 class InternalUserSettingsResponse(SettingsResponse):
@@ -917,6 +921,14 @@ async def update_ldap_settings(
         )
     )
 
+    try:
+        from litellm.proxy.proxy_server import ProxyStartupEvent, scheduler
+
+        if scheduler is not None:
+            await ProxyStartupEvent.configure_ldap_user_status_sync_job(scheduler=scheduler, run_startup=False)
+    except Exception as error:  # noqa: BLE001  # settings save must succeed even if local scheduler rescheduling fails
+        verbose_proxy_logger.warning("Failed to reschedule LDAP user status synchronization: %s", error)
+
     masked_ldap_data = mask_sensitive_keys(ldap_data, LDAP_SENSITIVE_FIELDS)
     if masked_ldap_data.get("ldap_bind_password"):
         masked_ldap_data["ldap_bind_password"] = "********"
@@ -925,6 +937,51 @@ async def update_ldap_settings(
         "status": "success",
         "settings": masked_ldap_data,
     }
+
+
+@router.post(
+    "/ldap/sync-user-status",
+    tags=["LDAP Settings"],
+    dependencies=[Depends(user_api_key_auth)],
+)
+async def sync_ldap_user_status(
+    request: LDAPUserStatusSyncRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
+    from litellm.proxy.auth.ldap_user_status_sync import LDAPUserStatusSyncManager
+    from litellm.proxy.proxy_server import (
+        create_config_audit_log,
+        prisma_client,
+        proxy_logging_obj,
+        user_api_key_cache,
+    )
+
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    ):
+        raise HTTPException(status_code=403, detail="Only proxy admins can synchronize LDAP user status.")
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"error": "Database not connected. Please connect a database."},
+        )
+    manager = LDAPUserStatusSyncManager(
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+    )
+    result = await manager.run(dry_run=request.dry_run, trigger="manual")
+    asyncio.create_task(
+        create_config_audit_log(
+            param_name="ldap_user_status_sync",
+            action="updated",
+            before_value=None,
+            after_value=result.model_dump(),
+            user_api_key_dict=user_api_key_dict,
+        )
+    )
+    return result
 
 
 @router.get(
