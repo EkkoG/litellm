@@ -1,5 +1,6 @@
 import sys
 import types
+import json
 from hashlib import sha256
 from typing import Protocol
 from unittest.mock import AsyncMock, MagicMock
@@ -38,6 +39,7 @@ def _patch_ldap_connection_results(
     monkeypatch: pytest.MonkeyPatch,
     directory_bind_result: bool | BaseException = True,
     user_bind_result: bool | BaseException = True,
+    access_match: bool = True,
 ) -> list[_TrackedLDAPConnection]:
     connections: list[_TrackedLDAPConnection] = []
     user_dn = "uid=alice,ou=People,dc=example,dc=com"
@@ -73,6 +75,9 @@ def _patch_ldap_connection_results(
             return result
 
         def search(self, **kwargs: object) -> bool:
+            if kwargs.get("search_scope") == "BASE":
+                self.entries = [FakeEntry()] if access_match else []
+                return access_match
             self.entries = [FakeEntry()]
             return True
 
@@ -144,12 +149,17 @@ async def test_sync_ldap_user_serializes_metadata_for_prisma():
 
     data = mock_prisma.db.litellm_usertable.upsert.call_args.kwargs["data"]
     principal_hash = sha256(b"uid=alice,dc=example,dc=com").hexdigest()
-    expected_metadata = (
-        '{"auth_provider": "ldap", "ldap_dn": "uid=alice,dc=example,dc=com", '
-        f'"ldap_principal_hash": "{principal_hash}"}}'
-    )
-    assert data["create"]["metadata"] == expected_metadata
-    assert data["update"]["metadata"] == expected_metadata
+    create_metadata = json.loads(data["create"]["metadata"])
+    update_metadata = json.loads(data["update"]["metadata"])
+    assert create_metadata == update_metadata
+    assert create_metadata["auth_provider"] == "ldap"
+    assert create_metadata["ldap_username"] == "alice"
+    assert create_metadata["ldap_dn"] == "uid=alice,dc=example,dc=com"
+    assert create_metadata["ldap_principal_hash"] == principal_hash
+    assert create_metadata["identity_active"] is True
+    assert create_metadata["identity_status"] == "active"
+    assert create_metadata["identity_status_reason"] == "login_verified"
+    assert create_metadata["identity_status_checked_at"]
     assert data["create"]["user_role"] == "internal_user"
     assert "user_role" not in data["update"]
 
@@ -280,7 +290,7 @@ async def test_sync_ldap_user_preserves_legacy_user_id_after_email_change():
             "ldap_dn": "uid=alice,dc=example,dc=com",
         },
     }
-    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=[None, None])
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=[None, None, legacy_user])
     mock_prisma.db.litellm_usertable.find_first = AsyncMock(return_value=legacy_user)
     mock_prisma.db.litellm_usertable.upsert = AsyncMock(
         return_value={
@@ -347,6 +357,16 @@ def test_ldap_directory_user_id_is_based_on_stable_principal_not_email():
     assert directory_user.user_id == f"ldap:{expected}"
 
 
+def test_ldap_sync_requires_access_filter() -> None:
+    with pytest.raises(ValueError, match="ldap_access_filter"):
+        LDAPConfig(ldap_sync_enabled=True)
+
+
+def test_ldap_sync_interval_has_safe_minimum() -> None:
+    with pytest.raises(ValueError):
+        LDAPConfig(ldap_sync_interval_seconds=59)
+
+
 def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(monkeypatch):
     captured = {}
 
@@ -399,6 +419,7 @@ def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(mon
 
     ldap3_module = types.ModuleType("ldap3")
     ldap3_module.NONE = "NONE"
+    ldap3_module.BASE = "BASE"
     ldap3_module.SUBTREE = "SUBTREE"
     ldap3_module.Server = FakeServer
     ldap3_module.Connection = FakeConnection
@@ -438,6 +459,52 @@ def test_authenticate_ldap_credentials_escapes_username_and_maps_admin_group(mon
     assert captured["search"]["search_base"] == "ou=People,dc=example,dc=com"
     assert captured["search"]["search_filter"] == r"(uid=ali\2a\28ce)"
     assert set(captured["search"]["attributes"]) == {"mail", "displayName", "memberOf"}
+
+
+def test_authenticate_ldap_credentials_rejects_user_that_does_not_match_access_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connections = _patch_ldap_connection_results(monkeypatch, access_match=False)
+    config = _ldap_connection_test_config()
+    config.ldap_access_filter = "(!(pwdAccountLockedTime=*))"
+
+    result = _authenticate_ldap_credentials(config, "alice", "ldap-password")
+
+    assert result is None
+    assert len(connections) == 1
+    assert connections[0].unbound is True
+
+
+@pytest.mark.asyncio
+async def test_sync_ldap_user_merges_existing_metadata() -> None:
+    mock_prisma = MagicMock()
+    existing_user = {
+        "user_id": "ldap:alice@example.com",
+        "metadata": {"custom_field": "preserved", "identity_active": False},
+    }
+    mock_prisma.db.litellm_usertable.find_unique = AsyncMock(side_effect=[None, existing_user, existing_user])
+    mock_prisma.db.litellm_usertable.upsert = AsyncMock(
+        return_value={
+            **existing_user,
+            "user_email": "alice@example.com",
+            "user_role": LitellmUserRoles.INTERNAL_USER,
+            "user_alias": "Alice",
+        }
+    )
+
+    await _sync_ldap_user(
+        mock_prisma,
+        LDAPDirectoryUser(
+            username="alice",
+            dn="uid=alice,dc=example,dc=com",
+            email="alice@example.com",
+            display_name="Alice",
+        ),
+    )
+
+    metadata = json.loads(mock_prisma.db.litellm_usertable.upsert.call_args.kwargs["data"]["update"]["metadata"])
+    assert metadata["custom_field"] == "preserved"
+    assert metadata["identity_active"] is True
 
 
 def test_authenticate_ldap_credentials_maps_directory_connection_error_to_503(

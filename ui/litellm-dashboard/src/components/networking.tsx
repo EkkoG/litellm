@@ -6611,6 +6611,25 @@ export const updateLDAPSettings = async (accessToken: string, settings: Record<s
   }
 };
 
+export interface LDAPUserStatusSyncResult {
+  dry_run: boolean;
+  trigger: "manual" | "scheduled" | "startup";
+  scanned: number;
+  activated: number;
+  deactivated: number;
+  would_activate: number;
+  would_deactivate: number;
+  missing: number;
+  unknown: number;
+  unchanged: number;
+  aborted: boolean;
+  abort_reason: string | null;
+}
+
+export const syncLDAPUserStatus = async (accessToken: string, dryRun: boolean): Promise<LDAPUserStatusSyncResult> => {
+  return await apiClient.post(`/ldap/sync-user-status`, { accessToken, body: { dry_run: dryRun } });
+};
+
 interface UiAuditLogsParams {
   action?: string;
   table_name?: string;
