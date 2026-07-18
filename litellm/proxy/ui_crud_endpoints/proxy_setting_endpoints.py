@@ -727,8 +727,16 @@ async def update_default_team_settings(
     dependencies=[Depends(user_api_key_auth)],
     response_model=LDAPSettingsResponse,
 )
-async def get_ldap_settings():
+async def get_ldap_settings(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+):
     from litellm.proxy.proxy_server import prisma_client, proxy_config
+
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    ):
+        raise HTTPException(status_code=403, detail="Only proxy admins can view LDAP settings.")
 
     if prisma_client is None:
         raise HTTPException(
@@ -748,6 +756,8 @@ async def get_ldap_settings():
 
     schema = TypeAdapter(LDAPConfig).json_schema(by_alias=True)
     ldap_dict = mask_sensitive_keys(ldap_config.model_dump(), LDAP_SENSITIVE_FIELDS)
+    if ldap_dict.get("ldap_bind_password"):
+        ldap_dict["ldap_bind_password"] = "********"
 
     result = {
         "values": ldap_dict,
@@ -772,7 +782,7 @@ async def get_ldap_settings():
 )
 async def update_ldap_settings(
     ldap_config: LDAPConfig,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     from litellm.proxy.proxy_server import (
         create_config_audit_log,
@@ -780,6 +790,12 @@ async def update_ldap_settings(
         proxy_config,
         store_model_in_db,
     )
+
+    if user_api_key_dict.user_role not in (
+        LitellmUserRoles.PROXY_ADMIN,
+        LitellmUserRoles.PROXY_ADMIN.value,
+    ):
+        raise HTTPException(status_code=403, detail="Only proxy admins can update LDAP settings.")
 
     if prisma_client is None:
         raise HTTPException(
@@ -836,10 +852,14 @@ async def update_ldap_settings(
     except Exception as error:  # noqa: BLE001  # settings save must succeed even if local scheduler rescheduling fails
         verbose_proxy_logger.warning("Failed to reschedule LDAP user status synchronization: %s", error)
 
+    masked_ldap_data = mask_sensitive_keys(ldap_data, LDAP_SENSITIVE_FIELDS)
+    if masked_ldap_data.get("ldap_bind_password"):
+        masked_ldap_data["ldap_bind_password"] = "********"
+
     return {
         "message": "LDAP settings updated successfully",
         "status": "success",
-        "settings": mask_sensitive_keys(ldap_data, LDAP_SENSITIVE_FIELDS),
+        "settings": masked_ldap_data,
     }
 
 

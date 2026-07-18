@@ -11,6 +11,7 @@ sys.path.insert(
 
 from litellm.proxy._types import DefaultInternalUserParams, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.proxy_server import app
+from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import user_api_key_auth
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
     SSOConfig,
@@ -73,11 +74,14 @@ def mock_proxy_config(monkeypatch):
 @pytest.fixture
 def mock_auth():
     """Mock the authentication to bypass auth checks using FastAPI dependency overrides"""
-    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.proxy_server import app
+    from litellm.proxy._types import LitellmUserRoles as CurrentLitellmUserRoles
+    from litellm.proxy._types import UserAPIKeyAuth as CurrentUserAPIKeyAuth
 
     async def mock_user_api_key_auth():
-        return {"user_id": "test_user"}
+        return CurrentUserAPIKeyAuth(
+            user_id="test_user",
+            user_role=CurrentLitellmUserRoles.PROXY_ADMIN,
+        )
 
     app.dependency_overrides[user_api_key_auth] = mock_user_api_key_auth
     yield
@@ -426,8 +430,7 @@ class TestProxySettingEndpoints:
         values = data["values"]
         assert values["ldap_enabled"] is True
         assert values["ldap_url"] == "ldaps://ldap.example.com:636"
-        assert values["ldap_bind_password"] != "super-secret"
-        assert "*" in values["ldap_bind_password"]
+        assert values["ldap_bind_password"] == "********"
         assert data["field_schema"]["properties"]["ldap_url"]["description"]
         mock_prisma.db.litellm_config.find_unique.assert_called_once_with(
             where={"param_name": "ldap_settings"}
@@ -470,13 +473,38 @@ class TestProxySettingEndpoints:
         data = response.json()
         assert data["status"] == "success"
         assert data["settings"]["ldap_enabled"] is True
-        assert data["settings"]["ldap_bind_password"] != "super-secret"
-        assert "*" in data["settings"]["ldap_bind_password"]
+        assert data["settings"]["ldap_bind_password"] == "********"
         upsert_data = mock_prisma.db.litellm_config.upsert.call_args.kwargs["data"]
         assert upsert_data["create"]["param_name"] == "ldap_settings"
         stored_settings = json.loads(upsert_data["create"]["param_value"])
         assert stored_settings["ldap_url"] == "ldaps://ldap.example.com:636"
         assert stored_settings["ldap_bind_password"] == "super-secret"
+
+    @pytest.mark.parametrize(
+        ("method", "path"),
+        [
+            ("get", "/get/ldap_settings"),
+            ("patch", "/update/ldap_settings"),
+        ],
+    )
+    @pytest.mark.parametrize(
+        "role",
+        [
+            LitellmUserRoles.INTERNAL_USER,
+            LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY,
+        ],
+    )
+    def test_ldap_settings_require_proxy_admin(self, mock_auth, method, path, role):
+        from litellm.proxy._types import UserAPIKeyAuth as CurrentUserAPIKeyAuth
+
+        async def non_admin_auth():
+            return CurrentUserAPIKeyAuth(user_id="test_user", user_role=role.value)
+
+        client.app.dependency_overrides[user_api_key_auth] = non_admin_auth
+
+        response = client.request(method=method, url=path, json={} if method == "patch" else None)
+
+        assert response.status_code == 403
 
     def test_sync_ldap_user_status_runs_as_proxy_admin(self, monkeypatch):
         from unittest.mock import AsyncMock, MagicMock
