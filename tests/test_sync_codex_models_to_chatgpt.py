@@ -212,6 +212,51 @@ def test_replace_removes_chatgpt_models_outside_priced_catalog():
     assert result.model_costs["chatgpt/gpt-5.2"]["input_cost_per_token"] == 0.00000175
 
 
+def test_preserve_models_are_neither_updated_nor_removed():
+    model_costs = parse_model_costs(
+        """
+        {
+            "gpt-5.6-sol": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.000005
+            },
+            "gpt-5.2": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.00000175
+            },
+            "chatgpt/gpt-5.6-sol": {
+                "litellm_provider": "chatgpt",
+                "mode": "responses",
+                "input_cost_per_token": 99.0
+            },
+            "chatgpt/gpt-image-2": {
+                "litellm_provider": "chatgpt",
+                "mode": "image_generation",
+                "input_cost_per_image_token": 88.0
+            },
+            "chatgpt/legacy": {
+                "litellm_provider": "chatgpt",
+                "mode": "responses"
+            }
+        }
+        """
+    )
+
+    result = sync_model_costs(
+        model_costs,
+        _catalog(),
+        replace=True,
+        preserve_models=("gpt-5.6-sol", "chatgpt/gpt-image-2"),
+    )
+
+    assert result.removed_keys == ("chatgpt/legacy",)
+    assert result.model_costs["chatgpt/gpt-5.6-sol"]["input_cost_per_token"] == 99.0
+    assert result.model_costs["chatgpt/gpt-image-2"]["input_cost_per_image_token"] == 88.0
+    assert result.model_costs["chatgpt/gpt-5.2"]["input_cost_per_token"] == 0.00000175
+
+
 def test_sync_file_is_idempotent(tmp_path: Path):
     path = tmp_path / "model_prices.json"
     path.write_text(

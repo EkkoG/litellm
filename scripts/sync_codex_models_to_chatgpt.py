@@ -62,6 +62,7 @@ class CliArgs(BaseModel):
     bundled: bool = False
     check: bool = False
     replace: bool = False
+    preserve_models: Optional[tuple[str, ...]] = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,16 +156,27 @@ def _present_sources(candidates: tuple[Optional[SourceModel], ...]) -> tuple[Sou
     return tuple(source for source in candidates if source is not None)
 
 
-def sync_model_costs(model_costs: ModelCostMap, catalog: CodexCatalog, replace: bool = False) -> SyncResult:
+def _chatgpt_key(model: str) -> str:
+    return model if model.startswith("chatgpt/") else f"chatgpt/{model}"
+
+
+def sync_model_costs(
+    model_costs: ModelCostMap,
+    catalog: CodexCatalog,
+    replace: bool = False,
+    preserve_models: Sequence[str] = (),
+) -> SyncResult:
     catalog_models = tuple(model for model in catalog.models if model.supported_in_api)
     catalog_sources = _present_sources(tuple(_catalog_source(model_costs, model) for model in catalog_models))
     image_sources = (
         () if replace else _present_sources(tuple(_image_source(key, value) for key, value in model_costs.items()))
     )
-    sources: tuple[SourceModel, ...] = (*catalog_sources, *image_sources)
-    if not sources:
+    available_sources: tuple[SourceModel, ...] = (*catalog_sources, *image_sources)
+    if not available_sources:
         raise ValueError("No Codex catalog models have matching OpenAI metadata")
 
+    preserved_key_set = frozenset(_chatgpt_key(model) for model in preserve_models)
+    sources = tuple(source for source in available_sources if _chatgpt_key(source[0]) not in preserved_key_set)
     matched_slugs = frozenset(key for key, _, _ in catalog_sources)
     skipped_models = tuple(model.slug for model in catalog_models if model.slug not in matched_slugs)
     target_keys = tuple(f"chatgpt/{source_key}" for source_key, _, _ in sources)
@@ -175,7 +187,9 @@ def sync_model_costs(model_costs: ModelCostMap, catalog: CodexCatalog, replace: 
     }
     updated_keys = tuple(key for key in target_keys if model_costs.get(key) != synced_entries[key])
     removed_keys = tuple(
-        key for key in model_costs if replace and key.startswith("chatgpt/") and key not in target_key_set
+        key
+        for key in model_costs
+        if replace and key.startswith("chatgpt/") and key not in target_key_set and key not in preserved_key_set
     )
     removed_key_set = frozenset(removed_keys)
     changed_keys = (*updated_keys, *removed_keys)
@@ -203,9 +217,20 @@ def parse_model_costs(json_text: str) -> ModelCostMap:
     return MODEL_COST_MAP_ADAPTER.validate_json(json_text)
 
 
-def sync_file(path: Path, catalog: CodexCatalog, check: bool = False, replace: bool = False) -> FileSyncResult:
+def sync_file(
+    path: Path,
+    catalog: CodexCatalog,
+    check: bool = False,
+    replace: bool = False,
+    preserve_models: Sequence[str] = (),
+) -> FileSyncResult:
     model_costs = parse_model_costs(path.read_text(encoding="utf-8"))
-    result = sync_model_costs(model_costs=model_costs, catalog=catalog, replace=replace)
+    result = sync_model_costs(
+        model_costs=model_costs,
+        catalog=catalog,
+        replace=replace,
+        preserve_models=preserve_models,
+    )
     if result.changed_keys and not check:
         serialized = json.dumps(result.model_costs, indent=4, ensure_ascii=False)
         path.write_text(serialized + "\n", encoding="utf-8")
@@ -227,6 +252,12 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> CliArgs:
         action="store_true",
         help="Remove ChatGPT models missing from the Codex catalog or without matching OpenAI metadata",
     )
+    parser.add_argument(
+        "--preserve-model",
+        action="append",
+        dest="preserve_models",
+        help="ChatGPT model to leave unchanged; may be repeated",
+    )
     return CliArgs.model_validate(vars(parser.parse_args(argv)))
 
 
@@ -237,7 +268,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         catalog = load_codex_catalog(_resolve_codex_binary(args.codex_bin), bundled=args.bundled)
         paths = tuple(args.paths) or DEFAULT_PATHS
         results = tuple(
-            (path, sync_file(path=path, catalog=catalog, check=args.check, replace=args.replace)) for path in paths
+            (
+                path,
+                sync_file(
+                    path=path,
+                    catalog=catalog,
+                    check=args.check,
+                    replace=args.replace,
+                    preserve_models=args.preserve_models or (),
+                ),
+            )
+            for path in paths
         )
     except (OSError, RuntimeError, ValueError, ValidationError) as exc:
         logger.error("%s", exc)
