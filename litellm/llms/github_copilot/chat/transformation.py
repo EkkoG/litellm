@@ -5,6 +5,7 @@ import os
 
 import httpx
 
+from litellm.exceptions import AuthenticationError
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
@@ -37,7 +38,19 @@ class GithubCopilotConfig(OpenAIConfig):
         custom_llm_provider: str,
         litellm_params: object = None,
     ) -> Tuple[str | None, str | None, str]:
-        dynamic_api_base = os.getenv("GITHUB_COPILOT_API_BASE") or DEFAULT_GITHUB_COPILOT_API_BASE
+        github_access_token = get_github_copilot_access_token(litellm_params)
+        try:
+            dynamic_api_base = (
+                self.authenticator.get_api_base(github_access_token)
+                or os.getenv("GITHUB_COPILOT_API_BASE")
+                or DEFAULT_GITHUB_COPILOT_API_BASE
+            )
+        except GetAPIKeyError as e:
+            raise AuthenticationError(
+                model=model,
+                llm_provider=custom_llm_provider,
+                message=str(e),
+            )
         return dynamic_api_base, None, custom_llm_provider
 
     def _transform_messages(
@@ -87,8 +100,12 @@ class GithubCopilotConfig(OpenAIConfig):
             copilot_api_key = self.authenticator.get_api_key(github_access_token)
             copilot_headers = get_copilot_default_headers(copilot_api_key)
             validated_headers = {**copilot_headers, **validated_headers}
-        except GetAPIKeyError:
-            pass  # Will be handled later in the request flow
+        except GetAPIKeyError as e:
+            raise AuthenticationError(
+                model=model,
+                llm_provider="github_copilot",
+                message=str(e),
+            )
 
         # Add X-Initiator header based on message roles
         initiator = self._determine_initiator(messages)

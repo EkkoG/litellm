@@ -19,23 +19,26 @@ import litellm
 # Import at the top to make the patch work correctly
 import litellm.llms.github_copilot.chat.transformation
 from litellm import Choices, Message, ModelResponse, Usage, acompletion, completion
+from litellm.exceptions import AuthenticationError
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.chat.transformation import GithubCopilotConfig
 from litellm.llms.github_copilot.common_utils import (
     APIKeyExpiredError,
     GetAccessTokenError,
+    GetAPIKeyError,
     GetDeviceCodeError,
     RefreshAPIKeyError,
 )
 
 
-def test_github_copilot_config_get_openai_compatible_provider_info():
+def test_github_copilot_config_get_openai_compatible_provider_info(monkeypatch):
     """Test the GitHub Copilot configuration provider info retrieval."""
 
     config = GithubCopilotConfig()
     config.authenticator = MagicMock()
+    config.authenticator.get_api_base.return_value = "https://tenant.business.githubcopilot.com"
+    monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "https://environment.githubcopilot.com")
 
-    # Test with default values
     model = "github_copilot/gpt-4"
     (
         api_base,
@@ -43,17 +46,49 @@ def test_github_copilot_config_get_openai_compatible_provider_info():
         custom_llm_provider,
     ) = config._get_openai_compatible_provider_info(
         model=model,
-        api_base=None,
+        api_base="https://caller.example.com",
         api_key=None,
         custom_llm_provider="github_copilot",
         litellm_params={"github_copilot_access_token": "github-access-token"},
     )
 
-    assert api_base == "https://api.githubcopilot.com"
+    assert api_base == "https://tenant.business.githubcopilot.com"
     assert dynamic_api_key is None
     assert custom_llm_provider == "github_copilot"
-    config.authenticator.get_api_base.assert_not_called()
+    config.authenticator.get_api_base.assert_called_once_with("github-access-token")
     config.authenticator.get_api_key.assert_not_called()
+
+
+def test_github_copilot_config_provider_info_requires_credential():
+    config = GithubCopilotConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_base.side_effect = GetAPIKeyError(message="credential required", status_code=401)
+
+    with pytest.raises(AuthenticationError, match="credential required"):
+        config._get_openai_compatible_provider_info(
+            model="github_copilot/gpt-4",
+            api_base=None,
+            api_key=None,
+            custom_llm_provider="github_copilot",
+            litellm_params={},
+        )
+
+
+def test_github_copilot_validate_environment_requires_credential():
+    config = GithubCopilotConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.side_effect = GetAPIKeyError(message="credential required", status_code=401)
+
+    with pytest.raises(AuthenticationError, match="credential required"):
+        config.validate_environment(
+            headers={},
+            model="github_copilot/gpt-4",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={},
+            litellm_params={},
+            api_key=None,
+            api_base=None,
+        )
 
 
 @patch("litellm.llms.github_copilot.authenticator.Authenticator.get_api_base")
@@ -109,6 +144,7 @@ def test_completion_github_copilot_mock_response(
     _, kwargs = invoked[0].call_args
 
     assert "headers" in kwargs
+    assert kwargs.get("api_base") == "https://api.githubcopilot.com"
     assert kwargs.get("model") == "gpt-4"
     assert kwargs.get("messages") == messages
 
