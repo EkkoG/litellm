@@ -139,6 +139,7 @@ def test_sync_model_costs_uses_catalog_models_and_preserves_image_sync():
         """
     )
     assert result.changed_keys == ("chatgpt/gpt-5.6-sol", "chatgpt/gpt-5.2", "chatgpt/gpt-image-2")
+    assert result.removed_keys == ()
     assert result.skipped_models == ("codex-auto-review",)
     assert result.model_costs["chatgpt/gpt-5.6-sol"] == expected["sol"]
     assert result.model_costs["chatgpt/gpt-5.2"] == expected["gpt52"]
@@ -150,6 +151,65 @@ def test_sync_model_costs_uses_catalog_models_and_preserves_image_sync():
     )
     assert "chatgpt/gpt-disabled" not in result.model_costs
     assert "chatgpt/codex-auto-review" not in result.model_costs
+
+
+def test_replace_removes_chatgpt_models_outside_priced_catalog():
+    model_costs = parse_model_costs(
+        """
+        {
+            "gpt-5.6-sol": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.000005
+            },
+            "gpt-5.2": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.00000175
+            },
+            "gpt-image-2": {
+                "litellm_provider": "openai",
+                "mode": "image_generation",
+                "input_cost_per_image_token": 0.000008
+            },
+            "chatgpt/gpt-5.6-sol": {
+                "litellm_provider": "chatgpt",
+                "mode": "responses"
+            },
+            "chatgpt/gpt-image-2": {
+                "litellm_provider": "chatgpt",
+                "mode": "image_generation"
+            },
+            "chatgpt/gpt-5.1-codex-max": {
+                "litellm_provider": "chatgpt",
+                "mode": "responses"
+            },
+            "chatgpt/codex-auto-review": {
+                "litellm_provider": "chatgpt",
+                "mode": "responses"
+            }
+        }
+        """
+    )
+
+    result = sync_model_costs(model_costs, _catalog(), replace=True)
+
+    assert result.removed_keys == (
+        "chatgpt/gpt-image-2",
+        "chatgpt/gpt-5.1-codex-max",
+        "chatgpt/codex-auto-review",
+    )
+    assert result.changed_keys == (
+        "chatgpt/gpt-5.6-sol",
+        "chatgpt/gpt-5.2",
+        *result.removed_keys,
+    )
+    assert tuple(key for key in result.model_costs if key.startswith("chatgpt/")) == (
+        "chatgpt/gpt-5.6-sol",
+        "chatgpt/gpt-5.2",
+    )
+    assert result.model_costs["chatgpt/gpt-5.6-sol"]["input_cost_per_token"] == 0.000005
+    assert result.model_costs["chatgpt/gpt-5.2"]["input_cost_per_token"] == 0.00000175
 
 
 def test_sync_file_is_idempotent(tmp_path: Path):
@@ -172,6 +232,8 @@ def test_sync_file_is_idempotent(tmp_path: Path):
     second_result = sync_file(path, _catalog())
 
     assert first_result.changed_keys == ("chatgpt/gpt-5.6-sol",)
+    assert first_result.removed_keys == ()
     assert first_result.skipped_models == ("gpt-5.2", "codex-auto-review")
     assert second_result.changed_keys == ()
+    assert second_result.removed_keys == ()
     assert path.read_text(encoding="utf-8") == first_sync

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import json
 import logging
 import shutil
 import subprocess
@@ -60,18 +61,21 @@ class CliArgs(BaseModel):
     codex_bin: Optional[Path] = None
     bundled: bool = False
     check: bool = False
+    replace: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class SyncResult:
     model_costs: ModelCostMap
     changed_keys: tuple[str, ...]
+    removed_keys: tuple[str, ...]
     skipped_models: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class FileSyncResult:
     changed_keys: tuple[str, ...]
+    removed_keys: tuple[str, ...]
     skipped_models: tuple[str, ...]
 
 
@@ -151,10 +155,12 @@ def _present_sources(candidates: tuple[Optional[SourceModel], ...]) -> tuple[Sou
     return tuple(source for source in candidates if source is not None)
 
 
-def sync_model_costs(model_costs: ModelCostMap, catalog: CodexCatalog) -> SyncResult:
+def sync_model_costs(model_costs: ModelCostMap, catalog: CodexCatalog, replace: bool = False) -> SyncResult:
     catalog_models = tuple(model for model in catalog.models if model.supported_in_api)
     catalog_sources = _present_sources(tuple(_catalog_source(model_costs, model) for model in catalog_models))
-    image_sources = _present_sources(tuple(_image_source(key, value) for key, value in model_costs.items()))
+    image_sources = (
+        () if replace else _present_sources(tuple(_image_source(key, value) for key, value in model_costs.items()))
+    )
     sources: tuple[SourceModel, ...] = (*catalog_sources, *image_sources)
     if not sources:
         raise ValueError("No Codex catalog models have matching OpenAI metadata")
@@ -167,29 +173,47 @@ def sync_model_costs(model_costs: ModelCostMap, catalog: CodexCatalog) -> SyncRe
         target_key: _sync_entry(source, model_costs.get(target_key), catalog_model)
         for target_key, (_, source, catalog_model) in zip(target_keys, sources)
     }
-    changed_keys = tuple(key for key in target_keys if model_costs.get(key) != synced_entries[key])
+    updated_keys = tuple(key for key in target_keys if model_costs.get(key) != synced_entries[key])
+    removed_keys = tuple(
+        key for key in model_costs if replace and key.startswith("chatgpt/") and key not in target_key_set
+    )
+    removed_key_set = frozenset(removed_keys)
+    changed_keys = (*updated_keys, *removed_keys)
     items = tuple(model_costs.items())
-    replaced_items = tuple((key, synced_entries[key] if key in target_key_set else value) for key, value in items)
+    replaced_items = tuple(
+        (key, synced_entries[key] if key in target_key_set else value)
+        for key, value in items
+        if key not in removed_key_set
+    )
     missing_entries = tuple((key, synced_entries[key]) for key in target_keys if key not in model_costs)
     chatgpt_indexes = tuple(index for index, (key, _) in enumerate(replaced_items) if key.startswith("chatgpt/"))
     insertion_index = max(chatgpt_indexes) + 1 if chatgpt_indexes else len(replaced_items)
     synced = dict(  # mutable-ok: output JSON mapping is built once and never mutated
         (*replaced_items[:insertion_index], *missing_entries, *replaced_items[insertion_index:])
     )
-    return SyncResult(model_costs=synced, changed_keys=changed_keys, skipped_models=skipped_models)
+    return SyncResult(
+        model_costs=synced,
+        changed_keys=changed_keys,
+        removed_keys=removed_keys,
+        skipped_models=skipped_models,
+    )
 
 
 def parse_model_costs(json_text: str) -> ModelCostMap:
     return MODEL_COST_MAP_ADAPTER.validate_json(json_text)
 
 
-def sync_file(path: Path, catalog: CodexCatalog, check: bool = False) -> FileSyncResult:
+def sync_file(path: Path, catalog: CodexCatalog, check: bool = False, replace: bool = False) -> FileSyncResult:
     model_costs = parse_model_costs(path.read_text(encoding="utf-8"))
-    result = sync_model_costs(model_costs=model_costs, catalog=catalog)
+    result = sync_model_costs(model_costs=model_costs, catalog=catalog, replace=replace)
     if result.changed_keys and not check:
-        serialized = MODEL_COST_MAP_ADAPTER.dump_json(result.model_costs, indent=4).decode("utf-8")
+        serialized = json.dumps(result.model_costs, indent=4, ensure_ascii=False)
         path.write_text(serialized + "\n", encoding="utf-8")
-    return FileSyncResult(changed_keys=result.changed_keys, skipped_models=result.skipped_models)
+    return FileSyncResult(
+        changed_keys=result.changed_keys,
+        removed_keys=result.removed_keys,
+        skipped_models=result.skipped_models,
+    )
 
 
 def _parse_args(argv: Optional[Sequence[str]] = None) -> CliArgs:
@@ -198,6 +222,11 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> CliArgs:
     parser.add_argument("--codex-bin", type=Path, help="Path to the Codex executable")
     parser.add_argument("--bundled", action="store_true", help="Use the catalog bundled with the Codex executable")
     parser.add_argument("--check", action="store_true", help="Exit with status 1 when files need synchronization")
+    parser.add_argument(
+        "--replace",
+        action="store_true",
+        help="Remove ChatGPT models missing from the Codex catalog or without matching OpenAI metadata",
+    )
     return CliArgs.model_validate(vars(parser.parse_args(argv)))
 
 
@@ -207,7 +236,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         catalog = load_codex_catalog(_resolve_codex_binary(args.codex_bin), bundled=args.bundled)
         paths = tuple(args.paths) or DEFAULT_PATHS
-        results = tuple((path, sync_file(path=path, catalog=catalog, check=args.check)) for path in paths)
+        results = tuple(
+            (path, sync_file(path=path, catalog=catalog, check=args.check, replace=args.replace)) for path in paths
+        )
     except (OSError, RuntimeError, ValueError, ValidationError) as exc:
         logger.error("%s", exc)
         return 2
@@ -216,6 +247,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         action = "needs sync" if args.check else "updated"
         message = f"{action} {len(result.changed_keys)} entries" if result.changed_keys else "already synchronized"
         logger.info("%s: %s", path, message)
+        if result.removed_keys:
+            logger.info("%s: removed %d unsupported ChatGPT models", path, len(result.removed_keys))
     skipped_models = results[0][1].skipped_models if results else ()
     if skipped_models:
         logger.info("Skipped catalog models without OpenAI metadata: %s", ", ".join(skipped_models))
