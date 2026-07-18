@@ -425,6 +425,48 @@ class TestChatGPTResponsesAPITransformation:
 
         assert parsed.output_text == "Hello from stream!"
 
+    def test_chatgpt_non_stream_sse_response_incomplete_recovers_partial_output(self):
+        config = ChatGPTResponsesAPIConfig()
+        response_payload = {
+            "id": "resp_incomplete",
+            "object": "response",
+            "created_at": 1700000000,
+            "status": "incomplete",
+            "model": "gpt-5.4",
+            "output": [],
+            "incomplete_details": {"reason": "max_output_tokens"},
+        }
+        output_text_done = {
+            "type": "response.output_text.done",
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_incomplete",
+            "text": "Partial response",
+        }
+        sse_body = "\n".join(
+            [
+                f"data: {json.dumps(output_text_done)}",
+                f"data: {json.dumps({'type': 'response.incomplete', 'response': response_payload})}",
+                "data: [DONE]",
+                "",
+            ]
+        )
+        raw_response = httpx.Response(
+            200, headers={"content-type": "text/event-stream"}, text=sse_body
+        )
+
+        parsed = config.transform_response_api_response(
+            model="chatgpt/gpt-5.4",
+            raw_response=raw_response,
+            logging_obj=MagicMock(),
+        )
+
+        assert parsed.status == "incomplete"
+        assert parsed.incomplete_details is not None
+        assert parsed.incomplete_details.reason == "max_output_tokens"
+        assert parsed.output_text == "Partial response"
+        assert parsed.output[0].status == "incomplete"
+
     def test_chatgpt_non_stream_sse_recovers_whitespace_padded_chunks(self):
         """Chunks with leading whitespace before `data:` must still parse.
 

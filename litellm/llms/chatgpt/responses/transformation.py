@@ -375,7 +375,10 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 )
                 continue
 
-            if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+            if event_type in (
+                ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+            ):
                 merged_items: dict[int, dict] = {**text_only_output_items}
                 merged_items.update(streamed_output_items)
                 completed_response = self._build_completed_response_from_chunk(
@@ -385,7 +388,8 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
                 response_payload = parsed_chunk.get("response")
                 response_output = response_payload.get("output") if isinstance(response_payload, dict) else None
                 verbose_logger.debug(
-                    "ChatGPT SSE response.completed response_output_len=%s recovered_output_len=%s event_counts=%s incomplete_details=%s",
+                    "ChatGPT SSE terminal response event_type=%s response_output_len=%s recovered_output_len=%s event_counts=%s incomplete_details=%s",
+                    event_type,
                     len(response_output) if isinstance(response_output, list) else None,
                     len(merged_items),
                     event_counts,
@@ -425,9 +429,12 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             return None
         response_payload = dict(response_payload)
         if not response_payload.get("output") and streamed_output_items:
-            response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
+            recovered_output = [item for _, item in sorted(streamed_output_items.items())]
+            if response_payload.get("status") == "incomplete":
+                recovered_output = [{**item, "status": "incomplete"} for item in recovered_output]
+            response_payload["output"] = recovered_output
             verbose_logger.debug(
-                "ChatGPT SSE filled empty response.completed output from streamed items count=%s item_types=%s",
+                "ChatGPT SSE filled empty terminal response output from streamed items count=%s item_types=%s",
                 len(streamed_output_items),
                 [item.get("type") for _, item in sorted(streamed_output_items.items())],
             )
