@@ -28,6 +28,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent 
 
 import { BarChart } from "@/components/shared/charts";
 import { chartColorValue } from "@/components/shared/charts/colors";
+import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   CartesianGrid,
@@ -484,6 +485,10 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       })),
     [sortedDailyResults],
   );
+  const dailyLineChartConfig = useMemo<ChartConfig>(
+    () => Object.fromEntries(TOKEN_LINE_DIMENSIONS.map((dimension) => [dimension.key, { label: dimension.label }])),
+    [],
+  );
   const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
   const mcpServerMetrics = useMemo(
@@ -793,92 +798,99 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                 );
                               }
                               return (
-                                <ComposedChart width={800} height={320} data={dailyChartData} style={{ width: "100%" }}>
-                                  <CartesianGrid vertical={false} />
-                                  <XAxis
-                                    dataKey="date"
-                                    tickLine={false}
-                                    axisLine={false}
-                                    minTickGap={5}
-                                    interval="equidistantPreserveStart"
-                                  />
-                                  <YAxis
-                                    yAxisId="count"
-                                    width={80}
-                                    tickLine={false}
-                                    axisLine={false}
-                                    tickFormatter={(value) => formatNumberWithCommas(value, 0)}
-                                  />
-                                  <YAxis
-                                    yAxisId="rate"
-                                    orientation="right"
-                                    width={48}
-                                    tickLine={false}
-                                    axisLine={false}
-                                    tickFormatter={(value) => `${value}%`}
-                                    domain={[0, 100]}
-                                  />
-                                  <YAxis yAxisId="spend" hide tickFormatter={valueFormatterSpend} />
-                                  <RechartsTooltip
-                                    content={({ active, payload, label }) => {
-                                      if (!active || !payload?.[0]) return null;
-                                      const data = payload[0].payload;
-                                      return (
-                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                          <p className="font-bold">{label}</p>
-                                          {TOKEN_LINE_DIMENSIONS.map((dimension) => (
-                                            <p
-                                              key={dimension.key}
-                                              style={{ color: `var(--color-${dimension.color}-600)` }}
-                                            >
-                                              {dimension.label}: {formatTokenLineValue(dimension, data[dimension.key])}
-                                            </p>
-                                          ))}
-                                        </div>
-                                      );
-                                    }}
-                                  />
-                                  <RechartsLegend verticalAlign="top" align="right" />
-                                  {SPEND_DIMENSIONS.map((dimension) => (
-                                    <Line
-                                      key={dimension.key}
-                                      yAxisId="spend"
-                                      type="linear"
-                                      dataKey={dimension.key}
-                                      name={dimension.label}
-                                      stroke={chartColorValue(dimension.color)}
-                                      strokeWidth={2}
-                                      dot={false}
-                                      isAnimationActive={false}
+                                <ChartContainer
+                                  config={dailyLineChartConfig}
+                                  className="h-96 w-full"
+                                  data-testid="daily-usage-line-chart"
+                                >
+                                  <ComposedChart data={dailyChartData} margin={{ bottom: 20 }}>
+                                    <CartesianGrid vertical={false} />
+                                    <XAxis
+                                      dataKey="date"
+                                      tickLine={false}
+                                      axisLine={false}
+                                      minTickGap={5}
+                                      interval="equidistantPreserveStart"
                                     />
-                                  ))}
-                                  {TOKEN_COUNT_DIMENSIONS.map((dimension) => (
-                                    <Line
-                                      key={dimension.key}
+                                    <YAxis
                                       yAxisId="count"
-                                      type="linear"
-                                      dataKey={dimension.key}
-                                      name={dimension.label}
-                                      stroke={chartColorValue(dimension.color)}
-                                      strokeWidth={2}
-                                      dot={false}
-                                      isAnimationActive={false}
+                                      width={80}
+                                      tickLine={false}
+                                      axisLine={false}
+                                      tickFormatter={(value) => formatNumberWithCommas(value, 0)}
                                     />
-                                  ))}
-                                  {RATE_DIMENSIONS.map((dimension) => (
-                                    <Line
-                                      key={dimension.key}
+                                    <YAxis
                                       yAxisId="rate"
-                                      type="linear"
-                                      dataKey={dimension.key}
-                                      name={dimension.label}
-                                      stroke={chartColorValue(dimension.color)}
-                                      strokeWidth={2}
-                                      dot={false}
-                                      isAnimationActive={false}
+                                      orientation="right"
+                                      width={48}
+                                      tickLine={false}
+                                      axisLine={false}
+                                      tickFormatter={(value) => `${value}%`}
+                                      domain={[0, 100]}
                                     />
-                                  ))}
-                                </ComposedChart>
+                                    <YAxis yAxisId="spend" hide tickFormatter={valueFormatterSpend} />
+                                    <RechartsTooltip
+                                      content={({ active, payload, label }) => {
+                                        if (!active || !payload?.[0]) return null;
+                                        const data = payload[0].payload;
+                                        return (
+                                          <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                            <p className="font-bold">{label}</p>
+                                            {TOKEN_LINE_DIMENSIONS.map((dimension) => (
+                                              <p
+                                                key={dimension.key}
+                                                style={{ color: `var(--color-${dimension.color}-600)` }}
+                                              >
+                                                {dimension.label}:{" "}
+                                                {formatTokenLineValue(dimension, data[dimension.key])}
+                                              </p>
+                                            ))}
+                                          </div>
+                                        );
+                                      }}
+                                    />
+                                    <RechartsLegend verticalAlign="bottom" align="center" />
+                                    {SPEND_DIMENSIONS.map((dimension) => (
+                                      <Line
+                                        key={dimension.key}
+                                        yAxisId="spend"
+                                        type="linear"
+                                        dataKey={dimension.key}
+                                        name={dimension.label}
+                                        stroke={chartColorValue(dimension.color)}
+                                        strokeWidth={2}
+                                        dot={false}
+                                        isAnimationActive={false}
+                                      />
+                                    ))}
+                                    {TOKEN_COUNT_DIMENSIONS.map((dimension) => (
+                                      <Line
+                                        key={dimension.key}
+                                        yAxisId="count"
+                                        type="linear"
+                                        dataKey={dimension.key}
+                                        name={dimension.label}
+                                        stroke={chartColorValue(dimension.color)}
+                                        strokeWidth={2}
+                                        dot={false}
+                                        isAnimationActive={false}
+                                      />
+                                    ))}
+                                    {RATE_DIMENSIONS.map((dimension) => (
+                                      <Line
+                                        key={dimension.key}
+                                        yAxisId="rate"
+                                        type="linear"
+                                        dataKey={dimension.key}
+                                        name={dimension.label}
+                                        stroke={chartColorValue(dimension.color)}
+                                        strokeWidth={2}
+                                        dot={false}
+                                        isAnimationActive={false}
+                                      />
+                                    ))}
+                                  </ComposedChart>
+                                </ChartContainer>
                               );
                             })()}
                           </CardContent>

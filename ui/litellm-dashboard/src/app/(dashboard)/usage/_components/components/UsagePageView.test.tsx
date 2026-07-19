@@ -751,6 +751,7 @@ describe("UsagePage", () => {
 
     expect(screen.getByText("Cached Tokens")).toBeInTheDocument();
     expect(screen.getByText("Cache Hit Rate")).toBeInTheDocument();
+    expect(screen.getByTestId("daily-usage-line-chart")).toHaveClass("w-full", "h-96");
 
     act(() => {
       fireEvent.click(screen.getByText("Bar"));
