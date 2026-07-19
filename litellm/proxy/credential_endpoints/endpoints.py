@@ -16,7 +16,9 @@ from litellm.llms.github_copilot.device_authorization import GitHubCopilotDevice
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_timezone, get_current_budget_date
-from litellm.proxy.credential_endpoints.chatgpt_credential_utils import refresh_chatgpt_credential_if_needed
+from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
+    async_refresh_chatgpt_credential_if_needed,
+)
 from litellm.proxy.credential_endpoints.chatgpt_quota_history import (
     ChatGPTQuotaHistoryDays,
     ChatGPTQuotaHistoryReader,
@@ -433,7 +435,7 @@ async def get_chatgpt_credential_subscription(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     try:
-        auth = _get_chatgpt_credential_auth(credential_name, user_api_key_dict)
+        auth = await _get_chatgpt_credential_auth(credential_name, user_api_key_dict)
         return await query_chatgpt_subscription_status(
             credential_name=auth.credential_name,
             access_token=auth.access_token,
@@ -505,7 +507,7 @@ async def consume_chatgpt_credential_rate_limit_reset_credit(
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ):
     try:
-        auth = _get_chatgpt_credential_auth(credential_name, user_api_key_dict)
+        auth = await _get_chatgpt_credential_auth(credential_name, user_api_key_dict)
         return await consume_chatgpt_rate_limit_reset_credit(
             credential_name=auth.credential_name,
             access_token=auth.access_token,
@@ -518,13 +520,13 @@ async def consume_chatgpt_credential_rate_limit_reset_credit(
         raise handle_exception_on_proxy(e)
 
 
-def _get_chatgpt_credential_auth(
+async def _get_chatgpt_credential_auth(
     credential_name: str,
     user_api_key_dict: UserAPIKeyAuth,
 ) -> ChatGPTCredentialAuth:
     credential = _get_chatgpt_credential(credential_name)
 
-    credential_values = refresh_chatgpt_credential_if_needed(
+    credential_values = await async_refresh_chatgpt_credential_if_needed(
         credential=credential,
         user_id=user_api_key_dict.user_id,
     )

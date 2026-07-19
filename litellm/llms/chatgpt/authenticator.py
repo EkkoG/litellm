@@ -8,7 +8,8 @@ from typing import Any, Optional
 
 import httpx
 
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import _get_httpx_client, get_async_httpx_client
+from litellm.types.utils import LlmProviders
 
 from .common_utils import (
     CHATGPT_API_BASE,
@@ -113,6 +114,15 @@ class Authenticator:
         if hasattr(litellm_params, "model_dump"):
             return litellm_params.model_dump(exclude_none=True)
         return {}
+
+    def is_access_token_expired(self, values: Mapping[str, object]) -> bool:
+        candidate_api_key = values.get("api_key")
+        auth_data = self._build_auth_data_from_params(
+            api_key=candidate_api_key if isinstance(candidate_api_key, str) else None,
+            litellm_params=values,
+        )
+        access_token = auth_data.get("access_token")
+        return not isinstance(access_token, str) or not access_token or self._is_token_expired(auth_data, access_token)
 
     def _is_token_expired(self, auth_data: dict[str, Any], access_token: str) -> bool:
         expires_at = auth_data.get("expires_at")
@@ -290,20 +300,51 @@ class Authenticator:
             "id_token": data["id_token"],
         }
 
+    @staticmethod
+    def _refresh_request(refresh_token: str) -> dict[str, str]:
+        return {
+            "client_id": CHATGPT_CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "openid profile email",
+        }
+
+    @staticmethod
+    def _parse_refresh_response(data: object, refresh_token: str) -> dict[str, str]:
+        if not isinstance(data, dict):
+            raise RefreshAccessTokenError(
+                message="Refresh response must be a JSON object",
+                status_code=400,
+            )
+        access_token = data.get("access_token")
+        id_token = data.get("id_token")
+        rotated_refresh_token = data.get("refresh_token", refresh_token)
+        if not isinstance(access_token, str) or not access_token or not isinstance(id_token, str) or not id_token:
+            raise RefreshAccessTokenError(
+                message=f"Refresh response missing fields: {data}",
+                status_code=400,
+            )
+        if not isinstance(rotated_refresh_token, str) or not rotated_refresh_token:
+            raise RefreshAccessTokenError(
+                message=f"Refresh response has an invalid refresh token: {data}",
+                status_code=400,
+            )
+        return {
+            "access_token": access_token,
+            "refresh_token": rotated_refresh_token,
+            "id_token": id_token,
+        }
+
     def _refresh_tokens(self, refresh_token: str) -> dict[str, str]:
         try:
-            client = _get_httpx_client()
-            resp = client.post(
+            response = _get_httpx_client().post(
                 CHATGPT_OAUTH_TOKEN_URL,
-                json={
-                    "client_id": CHATGPT_CLIENT_ID,
-                    "grant_type": "refresh_token",
-                    "refresh_token": refresh_token,
-                    "scope": "openid profile email",
-                },
+                json=self._refresh_request(refresh_token),
             )
-            resp.raise_for_status()
-            data = resp.json()
+            response.raise_for_status()
+            return self._parse_refresh_response(response.json(), refresh_token)
+        except RefreshAccessTokenError:
+            raise
         except httpx.HTTPStatusError as exc:
             raise RefreshAccessTokenError(
                 message=f"Refresh token failed: {exc}",
@@ -315,20 +356,25 @@ class Authenticator:
                 status_code=400,
             )
 
-        access_token = data.get("access_token")
-        id_token = data.get("id_token")
-        if not access_token or not id_token:
+    async def async_refresh_tokens(self, refresh_token: str) -> dict[str, str]:
+        try:
+            response = await get_async_httpx_client(llm_provider=LlmProviders.CHATGPT).post(
+                CHATGPT_OAUTH_TOKEN_URL,
+                json=self._refresh_request(refresh_token),
+            )
+            return self._parse_refresh_response(response.json(), refresh_token)
+        except RefreshAccessTokenError:
+            raise
+        except httpx.HTTPStatusError as exc:
             raise RefreshAccessTokenError(
-                message=f"Refresh response missing fields: {data}",
+                message=f"Refresh token failed: {exc}",
+                status_code=exc.response.status_code,
+            )
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RefreshAccessTokenError(
+                message=f"Refresh token failed: {exc}",
                 status_code=400,
             )
-
-        refreshed = {
-            "access_token": access_token,
-            "refresh_token": data.get("refresh_token", refresh_token),
-            "id_token": id_token,
-        }
-        return refreshed
 
     def _build_auth_record(self, tokens: dict[str, str]) -> dict[str, Any]:
         access_token = tokens.get("access_token")

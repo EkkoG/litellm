@@ -245,15 +245,14 @@ async def test_get_chatgpt_credential_subscription_uses_refreshed_values(monkeyp
         },
     )
     monkeypatch.setattr(litellm, "credential_list", [credential])
-    monkeypatch.setattr(
-        endpoints,
-        "refresh_chatgpt_credential_if_needed",
-        lambda credential, user_id: {
+    credential_refresher = AsyncMock(
+        return_value={
             "api_key": "new-token",
             "chatgpt_account_id": "account-id",
             "chatgpt_plan_type": "pro",
-        },
+        }
     )
+    monkeypatch.setattr(endpoints, "async_refresh_chatgpt_credential_if_needed", credential_refresher)
     query = AsyncMock(
         return_value={
             "credential_name": "chatgpt-admin",
@@ -318,10 +317,10 @@ async def test_get_chatgpt_credential_subscription_omits_stale_daily_snapshot(mo
         )
     )
 
-    def credential_refresher(credential: CredentialItem, user_id: str | None) -> dict[str, str]:
+    async def credential_refresher(credential: CredentialItem, user_id: str | None) -> dict[str, str]:
         return {"api_key": "access-token"}
 
-    monkeypatch.setattr(endpoints, "refresh_chatgpt_credential_if_needed", credential_refresher)
+    monkeypatch.setattr(endpoints, "async_refresh_chatgpt_credential_if_needed", credential_refresher)
     monkeypatch.setattr(endpoints, "query_chatgpt_subscription_status", query)
 
     await endpoints.get_chatgpt_credential_subscription(
@@ -495,14 +494,13 @@ async def test_consume_chatgpt_credential_rate_limit_reset_credit_uses_refreshed
         credential_info={"custom_llm_provider": "chatgpt"},
     )
     monkeypatch.setattr(litellm, "credential_list", [credential])
-    monkeypatch.setattr(
-        endpoints,
-        "refresh_chatgpt_credential_if_needed",
-        lambda credential, user_id: {
+    credential_refresher = AsyncMock(
+        return_value={
             "api_key": "new-token",
             "chatgpt_account_id": "account-id",
-        },
+        }
     )
+    monkeypatch.setattr(endpoints, "async_refresh_chatgpt_credential_if_needed", credential_refresher)
     consume = AsyncMock(
         return_value={
             "credential_name": "chatgpt-admin",

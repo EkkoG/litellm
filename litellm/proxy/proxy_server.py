@@ -778,6 +778,11 @@ def cleanup_router_config_variables():
 async def proxy_shutdown_event():
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
+        drain_chatgpt_credential_refreshes,
+    )
+
+    await drain_chatgpt_credential_refreshes()
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()

@@ -8617,9 +8617,9 @@ class Router:
         # Try to get deployment by model_id first
         deployment = self.get_deployment(model_id=model_id)
 
-        # If not found, try by model_group_name
-        if deployment is None:
-            deployment = self.get_deployment_by_model_group_name(model_group_name=model_id)
+        if deployment is None and model_id in self.model_name_to_deployment_indices:
+            selected = self.get_available_deployment(model=model_id)
+            deployment = Deployment(**selected) if isinstance(selected, dict) else selected
 
         # If not found, check team-scoped deployments whose team public model
         # name exactly matches model_id (wildcard team names are matched via

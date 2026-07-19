@@ -50,6 +50,18 @@ class TestChatGPTAuthenticator:
 
         assert token == "token-new"
 
+    def test_parse_refresh_response_preserves_unrotated_refresh_token(self, authenticator):
+        refreshed = authenticator._parse_refresh_response(
+            {"access_token": "token-new", "id_token": "id-new"},
+            "refresh-old",
+        )
+
+        assert refreshed == {
+            "access_token": "token-new",
+            "refresh_token": "refresh-old",
+            "id_token": "id-new",
+        }
+
     def test_get_access_token_does_not_start_local_device_login(self, authenticator):
         with pytest.raises(GetAccessTokenError):
             authenticator.get_access_token(api_key=None, litellm_params={})
