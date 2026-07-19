@@ -254,3 +254,94 @@ async def test_scheduled_chatgpt_daily_quota_snapshot_skips_outside_global_midni
     await job.func(*job.args)
 
     recorder.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_chatgpt_daily_quota_snapshot_skips_when_another_pod_holds_lock():
+    scheduler = AsyncIOScheduler()
+    recorder = AsyncMock(return_value=())
+    pod_lock_manager = Mock()
+    pod_lock_manager.redis_cache = Mock()
+    pod_lock_manager.acquire_lock = AsyncMock(return_value=False)
+    pod_lock_manager.release_lock = AsyncMock()
+
+    schedule_chatgpt_daily_quota_snapshot_job(
+        scheduler=scheduler,
+        repository=Mock(),
+        credential_source=Mock(return_value=()),
+        recorder=recorder,
+        timezone_provider=Mock(return_value="UTC"),
+        now_provider=Mock(return_value=datetime(2026, 7, 15, 0, 0, tzinfo=timezone.utc)),
+        pod_lock_manager=pod_lock_manager,
+    )
+
+    job = scheduler.get_job(CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID)
+    assert job is not None
+
+    await job.func(*job.args)
+
+    pod_lock_manager.acquire_lock.assert_awaited_once()
+    recorder.assert_not_awaited()
+    pod_lock_manager.release_lock.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_scheduled_chatgpt_daily_quota_snapshot_records_and_releases_lock():
+    scheduler = AsyncIOScheduler()
+    credential = CredentialItem(
+        credential_name="chatgpt-admin",
+        credential_values={},
+        credential_info={"custom_llm_provider": "chatgpt"},
+    )
+    recorder = AsyncMock(return_value=())
+    pod_lock_manager = Mock()
+    pod_lock_manager.redis_cache = Mock()
+    pod_lock_manager.acquire_lock = AsyncMock(return_value=True)
+    pod_lock_manager.release_lock = AsyncMock()
+
+    schedule_chatgpt_daily_quota_snapshot_job(
+        scheduler=scheduler,
+        repository=Mock(),
+        credential_source=Mock(return_value=(credential,)),
+        recorder=recorder,
+        timezone_provider=Mock(return_value="UTC"),
+        now_provider=Mock(return_value=datetime(2026, 7, 15, 0, 0, tzinfo=timezone.utc)),
+        pod_lock_manager=pod_lock_manager,
+    )
+
+    job = scheduler.get_job(CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID)
+    assert job is not None
+
+    await job.func(*job.args)
+
+    recorder.assert_awaited_once()
+    pod_lock_manager.release_lock.assert_awaited_once_with(
+        cronjob_id=CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID
+    )
+
+
+@pytest.mark.asyncio
+async def test_scheduled_chatgpt_daily_quota_snapshot_runs_unlocked_without_redis():
+    scheduler = AsyncIOScheduler()
+    recorder = AsyncMock(return_value=())
+    pod_lock_manager = Mock()
+    pod_lock_manager.redis_cache = None
+    pod_lock_manager.acquire_lock = AsyncMock()
+
+    schedule_chatgpt_daily_quota_snapshot_job(
+        scheduler=scheduler,
+        repository=Mock(),
+        credential_source=Mock(return_value=()),
+        recorder=recorder,
+        timezone_provider=Mock(return_value="UTC"),
+        now_provider=Mock(return_value=datetime(2026, 7, 15, 0, 0, tzinfo=timezone.utc)),
+        pod_lock_manager=pod_lock_manager,
+    )
+
+    job = scheduler.get_job(CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID)
+    assert job is not None
+
+    await job.func(*job.args)
+
+    pod_lock_manager.acquire_lock.assert_not_awaited()
+    recorder.assert_awaited_once()
