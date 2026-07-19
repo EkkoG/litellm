@@ -26,7 +26,7 @@ import {
 import { Alert, Button, Segmented, Select, Tooltip, Typography } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 
-import { BarChart } from "@/components/shared/charts";
+import { BarChart, CustomLegend } from "@/components/shared/charts";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
@@ -54,8 +54,8 @@ import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata, TopUserData } from "@/components/UsagePage/types";
+import { TOKEN_LINE_DIMENSIONS, formatTokenLineValue } from "@/components/UsagePage/utils/token_line_dimensions";
 import { formatPromptCacheHitRate, valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
-import { DailySpendTable } from "./DailySpendTable";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
@@ -457,6 +457,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [userSpendData.results],
   );
+  const dailyChartData = useMemo(
+    () =>
+      sortedDailyResults.map((day) => ({
+        ...day,
+        ...Object.fromEntries(
+          TOKEN_LINE_DIMENSIONS.map((dimension) => [dimension.key, dimension.getValue(day.metrics)]),
+        ),
+      })),
+    [sortedDailyResults],
+  );
   const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
   const mcpServerMetrics = useMemo(
@@ -716,40 +726,62 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Col numColSpan={2}>
                         <ShadcnCard>
                           <CardHeader>
-                            <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                              <CustomLegend
+                                categories={[
+                                  "metrics.spend",
+                                  ...TOKEN_LINE_DIMENSIONS.map((dimension) => dimension.label),
+                                ]}
+                                colors={["cyan", ...TOKEN_LINE_DIMENSIONS.map((dimension) => dimension.color)]}
+                              />
+                            </div>
                           </CardHeader>
                           <CardContent>
                             {loading ? (
                               <ChartLoader isDateChanging={isDateChanging} />
                             ) : (
-                              <>
-                                <BarChart
-                                  data={sortedDailyResults}
-                                  index="date"
-                                  categories={["metrics.spend"]}
-                                  colors={["cyan"]}
-                                  valueFormatter={valueFormatterSpend}
-                                  yAxisWidth={100}
-                                  showLegend={false}
-                                  customTooltip={({ payload, active }) => {
-                                    if (!active || !payload?.[0]) return null;
-                                    const data = payload[0].payload;
-                                    return (
-                                      <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                        <p className="font-bold">{data.date}</p>
-                                        <p className="text-cyan-500">
-                                          Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                              <BarChart
+                                data={dailyChartData}
+                                index="date"
+                                categories={["metrics.spend"]}
+                                colors={["cyan"]}
+                                valueFormatter={valueFormatterSpend}
+                                yAxisWidth={100}
+                                showLegend={false}
+                                lineCategories={TOKEN_LINE_DIMENSIONS.map((dimension) => dimension.key)}
+                                lineColors={TOKEN_LINE_DIMENSIONS.map((dimension) => dimension.color)}
+                                lineValueFormatter={(value) => formatNumberWithCommas(value, 0)}
+                                customTooltip={({ payload, active }) => {
+                                  if (!active || !payload?.[0]) return null;
+                                  const data = payload[0].payload;
+                                  return (
+                                    <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                      <p className="font-bold">{data.date}</p>
+                                      <p className="text-cyan-500">
+                                        Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
+                                      </p>
+                                      <p className="text-gray-600">
+                                        Requests: {data.metrics.api_requests.toLocaleString()}
+                                      </p>
+                                      <p className="text-gray-600">
+                                        Successful: {data.metrics.successful_requests.toLocaleString()}
+                                      </p>
+                                      <p className="text-gray-600">
+                                        Failed: {data.metrics.failed_requests.toLocaleString()}
+                                      </p>
+                                      <p className="text-gray-600">
+                                        Tokens: {data.metrics.total_tokens.toLocaleString()}
+                                      </p>
+                                      {TOKEN_LINE_DIMENSIONS.map((dimension) => (
+                                        <p key={dimension.key} style={{ color: `var(--color-${dimension.color}-600)` }}>
+                                          {dimension.label}: {formatTokenLineValue(dimension, data[dimension.key])}
                                         </p>
-                                        <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                        <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                        <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                        <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                                      </div>
-                                    );
-                                  }}
-                                />
-                                <DailySpendTable data={sortedDailyResults} />
-                              </>
+                                      ))}
+                                    </div>
+                                  );
+                                }}
+                              />
                             )}
                           </CardContent>
                         </ShadcnCard>
