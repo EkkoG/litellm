@@ -7867,6 +7867,88 @@ async def test_key_does_not_override_explicit_budget_duration():
 @patch(
     "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
 )
+async def test_rotate_master_key_reencrypts_credentials_table(
+    mock_rotate_mcp,
+    monkeypatch,
+):
+    """
+    Regression test for: master key rotation crashed with ImportError when the
+    credentials table was non-empty, leaving earlier tables re-encrypted with
+    the new key while credentials stayed on the old key.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+    from litellm.types.utils import CredentialItem
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_rotate_mcp.return_value = None
+
+    stored_credential = CredentialItem(
+        credential_name="managed-chatgpt",
+        credential_values={"api_key": "cipher::old-key::plain-token"},
+        credential_info={"custom_llm_provider": "chatgpt"},
+    )
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[stored_credential]
+    )
+    mock_prisma_client.db.litellm_credentialstable.update = AsyncMock()
+
+    mock_proxy_config = MagicMock()
+    mock_proxy_config.decrypt_credentials.return_value = CredentialItem(
+        credential_name="managed-chatgpt",
+        credential_values={"api_key": "plain-token"},
+        credential_info={"custom_llm_provider": "chatgpt"},
+    )
+
+    encrypt_calls = []
+
+    def fake_encrypt(value: str, new_encryption_key=None) -> str:
+        encrypt_calls.append((value, new_encryption_key))
+        return f"cipher::new::{len(value)}"
+
+    monkeypatch.setattr(
+        "litellm.proxy.credential_endpoints.credential_writer.encrypt_value_helper",
+        fake_encrypt,
+    )
+
+    user_api_key_dict = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="sk-1234",
+        user_id="test-user",
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_config",
+        mock_proxy_config,
+    ):
+        await _rotate_master_key(
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=user_api_key_dict,
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    assert encrypt_calls == [("plain-token", "sk-new-master-key")]
+    mock_prisma_client.db.litellm_credentialstable.update.assert_awaited_once()
+    update_kwargs = mock_prisma_client.db.litellm_credentialstable.update.call_args.kwargs
+    assert update_kwargs["where"] == {"credential_name": "managed-chatgpt"}
+    stored_values = update_kwargs["data"]["credential_values"]
+    stored_dump = repr(getattr(stored_values, "data", stored_values))
+    assert "plain-token" not in stored_dump
+    assert "cipher::new::11" in stored_dump
+
+
+@pytest.mark.asyncio
+@patch(
+    "litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"
+)
 async def test_rotate_master_key_model_data_valid_for_prisma(
     mock_rotate_mcp,
 ):

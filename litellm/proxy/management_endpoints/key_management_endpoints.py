@@ -4248,7 +4248,7 @@ async def _rotate_master_key(
     except Exception:
         credentials = None
     if credentials:
-        from litellm.proxy.credential_endpoints.endpoints import update_db_credential
+        from litellm.proxy.credential_endpoints.credential_writer import update_db_credential
 
         for cred in credentials:
             try:
