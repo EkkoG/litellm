@@ -51,5 +51,46 @@ class CredentialsRepository:
     async def update_by_name(self, credential_name: str, data: Dict[str, Any]) -> Any:
         return await self.table.update(where={"credential_name": credential_name}, data=data)
 
+    @property
+    def supports_json_merge_update(self) -> bool:
+        try:
+            return self.prisma_client.db is not None
+        except RuntimeError:
+            return False
+
+    async def merge_update_by_name(
+        self,
+        credential_name: str,
+        new_name: str,
+        credential_values_patch: Dict[str, Any],
+        credential_info_patch: Dict[str, Any],
+        updated_by: str | None,
+    ) -> bool:
+        """Merge top-level keys into the stored JSON documents in one UPDATE.
+
+        Unlike find_by_name + update_by_name, the merge happens inside the
+        database, so concurrent patches to disjoint keys do not overwrite each
+        other. Returns False when no credential matches ``credential_name``.
+        """
+        import json as _json
+
+        result = await self.prisma_client.db.execute_raw(
+            """
+            UPDATE "LiteLLM_CredentialsTable"
+            SET
+                credential_name = $2,
+                credential_values = COALESCE(credential_values, '{}'::jsonb) || $3::jsonb,
+                credential_info = COALESCE(credential_info, '{}'::jsonb) || $4::jsonb,
+                updated_by = $5
+            WHERE credential_name = $1
+            """,
+            credential_name,
+            new_name,
+            _json.dumps(credential_values_patch),
+            _json.dumps(credential_info_patch),
+            updated_by,
+        )
+        return int(result) > 0
+
     async def delete_by_name(self, credential_name: str) -> Any:
         return await self.table.delete(where={"credential_name": credential_name})
