@@ -89,7 +89,8 @@ def test_prepare_fake_stream_request():
     assert result_data["messages"] == [{"role": "user", "content": "Hello"}]
 
 
-def test_response_api_handler_streams_when_provider_transform_adds_stream():
+def test_response_api_handler_streams_when_provider_transform_adds_stream(monkeypatch):
+    monkeypatch.setenv("LITELLM_PROVIDER_REQUEST_DIAGNOSTICS", "true")
     handler = BaseLLMHTTPHandler()
     config = Mock()
     config.validate_environment.return_value = {}
@@ -147,7 +148,8 @@ def test_response_api_handler_streams_when_provider_transform_adds_stream():
     }
 
 
-def test_provider_request_diagnostics_are_fail_open():
+def test_provider_request_diagnostics_are_fail_open(monkeypatch):
+    monkeypatch.setenv("LITELLM_PROVIDER_REQUEST_DIAGNOSTICS", "true")
     handler = BaseLLMHTTPHandler()
     config = Mock()
     config.get_provider_request_diagnostics.side_effect = RuntimeError("diagnostics failed")
@@ -272,7 +274,8 @@ def test_response_api_handler_runs_responses_pre_call_hook_before_transform():
 
 
 @pytest.mark.asyncio
-async def test_async_response_api_handler_streams_when_provider_transform_adds_stream():
+async def test_async_response_api_handler_streams_when_provider_transform_adds_stream(monkeypatch):
+    monkeypatch.setenv("LITELLM_PROVIDER_REQUEST_DIAGNOSTICS", "true")
     handler = BaseLLMHTTPHandler()
     config = Mock()
     config.validate_environment.return_value = {}
@@ -313,6 +316,25 @@ async def test_async_response_api_handler_streams_when_provider_transform_adds_s
     ]
     assert provider_request["provider"] == "chatgpt"
     assert provider_request["request"] == {"body_hash": "async-request-hash"}
+
+
+def test_provider_request_diagnostics_are_disabled_by_default(monkeypatch):
+    monkeypatch.delenv("LITELLM_PROVIDER_REQUEST_DIAGNOSTICS", raising=False)
+    handler = BaseLLMHTTPHandler()
+    config = Mock()
+    config.get_provider_request_diagnostics.return_value = {"body_hash": "hash"}
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"litellm_params": {"metadata": {}}}
+
+    handler._record_provider_request_diagnostics(
+        responses_api_provider_config=config,
+        headers={},
+        request_data={"model": "gpt-5.3-codex"},
+        logging_obj=logging_obj,
+    )
+
+    config.get_provider_request_diagnostics.assert_not_called()
+    assert logging_obj.model_call_details == {"litellm_params": {"metadata": {}}}
 
 
 def test_get_agentic_loop_settings_defaults_and_overrides():
