@@ -28,6 +28,7 @@ const sessionRow: SessionLogEntry = {
   team_ids: ["team-1"],
   api_keys: ["key-1"],
   users: ["user-1"],
+  user_aliases: [{ user_id: "user-1", user_alias: "Alice" }],
   end_users: ["end-user-1"],
   team_names: ["Platform"],
   key_aliases: ["codex-key"],
@@ -54,5 +55,50 @@ describe("session log columns", () => {
     expect(screen.getByText("75.0%")).toBeInTheDocument();
     expect(screen.getByText("3,000 / 4,000")).toBeInTheDocument();
     expect(screen.getByText("gpt-5.2 +1")).toBeInTheDocument();
+  });
+
+  it("renders the user alias with user ID when aliases are provided", () => {
+    render(
+      <DataTable
+        data={[sessionRow]}
+        columns={createSessionColumns({ sortBy: "startTime", sortOrder: "desc", onSortChange: vi.fn() })}
+        getRowId={(row) => row.group_id}
+      />,
+    );
+
+    expect(screen.getByText("Alice (user-1)")).toBeInTheDocument();
+  });
+
+  it("falls back to plain user IDs when no aliases are provided", () => {
+    render(
+      <DataTable
+        data={[{ ...sessionRow, user_aliases: null }]}
+        columns={createSessionColumns({ sortBy: "startTime", sortOrder: "desc", onSortChange: vi.fn() })}
+        getRowId={(row) => row.group_id}
+      />,
+    );
+
+    expect(screen.getByText("user-1")).toBeInTheDocument();
+  });
+
+  it("shows truncated alias display with count for multiple users", () => {
+    render(
+      <DataTable
+        data={[
+          {
+            ...sessionRow,
+            users: ["user-1", "user-2"],
+            user_aliases: [
+              { user_id: "user-1", user_alias: "Alice" },
+              { user_id: "user-2", user_alias: null },
+            ],
+          },
+        ]}
+        columns={createSessionColumns({ sortBy: "startTime", sortOrder: "desc", onSortChange: vi.fn() })}
+        getRowId={(row) => row.group_id}
+      />,
+    );
+
+    expect(screen.getByText("Alice (user-1) +1")).toBeInTheDocument();
   });
 });

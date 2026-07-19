@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it } from "vitest";
 
-import { createColumns, type LogEntry } from "./columns";
+import { createColumns, formatUserDisplay, type LogEntry } from "./columns";
 import { DataTable } from "./table";
 
 const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
@@ -69,6 +69,65 @@ describe("Cost column", () => {
     expect(screen.getByText("$0.060000")).toBeInTheDocument();
     expect(screen.queryByText("$0.010000")).not.toBeInTheDocument();
     expect(screen.getByText("session total")).toBeInTheDocument();
+  });
+});
+
+describe("Internal User column", () => {
+  it("renders the alias and user ID when an alias is available", () => {
+    renderLogEntry({
+      request_id: "req-user-alias",
+      user: "user-id-123",
+      user_alias: "Alice",
+    });
+
+    expect(screen.getByText("Alice (user-id-123)")).toBeInTheDocument();
+  });
+
+  it("falls back to the user ID alone when no alias is set", () => {
+    renderLogEntry({
+      request_id: "req-user-no-alias",
+      user: "user-id-456",
+    });
+
+    expect(screen.getByText("user-id-456")).toBeInTheDocument();
+  });
+
+  it("shows the user ID once when the alias equals the ID", () => {
+    renderLogEntry({
+      request_id: "req-user-alias-equals-id",
+      user: "user-id-789",
+      user_alias: "user-id-789",
+    });
+
+    expect(screen.getByText("user-id-789")).toBeInTheDocument();
+  });
+
+  it("shows '-' when no user is set", () => {
+    renderLogEntry({
+      request_id: "req-no-user",
+    });
+
+    const internalUserColumnIndex = screen.getByRole("columnheader", { name: "Internal User" }).cellIndex;
+    const row = screen.getByText("req-no-user").closest("tr");
+
+    expect(row).not.toBeNull();
+    expect(within(row!).getAllByRole("cell")[internalUserColumnIndex]).toHaveTextContent("-");
+  });
+});
+
+describe("formatUserDisplay", () => {
+  it("formats alias with user ID in parentheses", () => {
+    expect(formatUserDisplay("user-id-123", "Alice")).toBe("Alice (user-id-123)");
+  });
+
+  it("returns the user ID when alias is missing or matches the ID", () => {
+    expect(formatUserDisplay("user-id-123", null)).toBe("user-id-123");
+    expect(formatUserDisplay("user-id-123", "")).toBe("user-id-123");
+    expect(formatUserDisplay("user-id-123", "user-id-123")).toBe("user-id-123");
+  });
+
+  it("returns '-' when user ID is missing", () => {
+    expect(formatUserDisplay(undefined, "Alice")).toBe("-");
   });
 });
 
