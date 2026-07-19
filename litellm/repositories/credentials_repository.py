@@ -6,9 +6,18 @@ credential values is the caller's responsibility (see ``CredentialHelperUtils``)
 so reads return the stored values verbatim.
 """
 
+import hashlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from datetime import timedelta
 from typing import Any, Dict, Optional
 
 from litellm.models.credentials import CredentialItem
+
+
+class _TransactionPrismaClient:
+    def __init__(self, transaction: Any) -> None:
+        self.db = transaction
 
 
 class CredentialsRepository:
@@ -47,6 +56,26 @@ class CredentialsRepository:
     async def find_by_name(self, credential_name: str) -> Optional[CredentialItem]:
         record = await self.table.find_unique(where={"credential_name": credential_name})
         return self._to_model(record)
+
+    @staticmethod
+    def advisory_lock_key(credential_name: str) -> int:
+        return int.from_bytes(
+            hashlib.blake2b(
+                f"litellm:chatgpt-credential:{credential_name}".encode(),
+                digest_size=8,
+            ).digest(),
+            "big",
+            signed=True,
+        )
+
+    @asynccontextmanager
+    async def locked_by_name(self, credential_name: str) -> AsyncIterator["CredentialsRepository"]:
+        async with self.prisma_client.db.tx(timeout=timedelta(seconds=30)) as transaction:
+            await transaction.execute_raw(
+                "SELECT pg_advisory_xact_lock($1::bigint)",
+                self.advisory_lock_key(credential_name),
+            )
+            yield CredentialsRepository(_TransactionPrismaClient(transaction))
 
     async def update_by_name(self, credential_name: str, data: Dict[str, Any]) -> Any:
         return await self.table.update(where={"credential_name": credential_name}, data=data)

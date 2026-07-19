@@ -3714,6 +3714,56 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     litellm.credential_list = []
 
 
+def test_same_model_group_resolves_only_selected_oauth_credential():
+    from litellm.types.utils import CredentialItem
+
+    litellm.credential_list = [
+        CredentialItem(
+            credential_name="chatgpt-a",
+            credential_info={"custom_llm_provider": "chatgpt"},
+            credential_values={"api_key": "access-a", "chatgpt_account_id": "account-a"},
+        ),
+        CredentialItem(
+            credential_name="chatgpt-b",
+            credential_info={"custom_llm_provider": "chatgpt"},
+            credential_values={"api_key": "access-b", "chatgpt_account_id": "account-b"},
+        ),
+    ]
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "chatgpt-pool",
+                "litellm_params": {
+                    "model": "chatgpt/gpt-5.2",
+                    "litellm_credential_name": "chatgpt-a",
+                },
+                "model_info": {"id": "deployment-a"},
+            },
+            {
+                "model_name": "chatgpt-pool",
+                "litellm_params": {
+                    "model": "chatgpt/gpt-5.2",
+                    "litellm_credential_name": "chatgpt-b",
+                },
+                "model_info": {"id": "deployment-b"},
+            },
+        ],
+    )
+
+    first = router.get_deployment_credentials_with_provider("deployment-a")
+    second = router.get_deployment_credentials_with_provider("deployment-b")
+
+    assert first is not None
+    assert second is not None
+    assert first["api_key"] == "access-a"
+    assert first["chatgpt_account_id"] == "account-a"
+    assert second["api_key"] == "access-b"
+    assert second["chatgpt_account_id"] == "account-b"
+    assert "litellm_credential_name" not in first
+    assert "litellm_credential_name" not in second
+    litellm.credential_list = []
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",

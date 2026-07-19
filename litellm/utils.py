@@ -613,15 +613,21 @@ def load_credentials_from_list(kwargs: dict):
     """
     Updates kwargs with the credentials if credential_name in kwarg
     """
-    # Access CredentialAccessor via module to trigger lazy loading if needed
     CredentialAccessor = getattr(sys.modules[__name__], "CredentialAccessor")
 
     credential_name = kwargs.get("litellm_credential_name")
     if credential_name and litellm.credential_list:
-        credential_accessor = CredentialAccessor.get_credential_values(credential_name)
-        for key, value in credential_accessor.items():
-            if key not in kwargs:
-                kwargs[key] = value
+        credential_values = CredentialAccessor.get_credential_values(credential_name)
+        kwargs.update({key: value for key, value in credential_values.items() if key not in kwargs})
+
+
+async def async_load_credentials_from_list(kwargs: dict) -> None:
+    CredentialAccessor = getattr(sys.modules[__name__], "CredentialAccessor")
+
+    credential_name = kwargs.get("litellm_credential_name")
+    if credential_name and litellm.credential_list:
+        credential_values = await CredentialAccessor.get_credential_values_async(credential_name)
+        kwargs.update({key: value for key, value in credential_values.items() if key not in kwargs})
 
 
 def get_dynamic_callbacks(
@@ -1617,8 +1623,7 @@ def client(original_function):
                 logging_obj.stream = _hook_stream
 
             kwargs["litellm_logging_obj"] = logging_obj
-            ## LOAD CREDENTIALS
-            load_credentials_from_list(kwargs)
+            await async_load_credentials_from_list(kwargs)
             logging_obj._llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:

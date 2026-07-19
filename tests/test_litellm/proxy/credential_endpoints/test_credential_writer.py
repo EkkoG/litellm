@@ -249,6 +249,16 @@ async def test_credential_writer_json_merge_maps_missing_credential_to_not_found
     assert isinstance(result, CredentialNotFound)
 
 
+def test_credentials_repository_advisory_lock_key_is_stable_and_credential_scoped():
+    from litellm.repositories.credentials_repository import CredentialsRepository
+
+    first = CredentialsRepository.advisory_lock_key("credential-a")
+
+    assert first == CredentialsRepository.advisory_lock_key("credential-a")
+    assert first != CredentialsRepository.advisory_lock_key("credential-b")
+    assert -(2**63) <= first < 2**63
+
+
 def test_credentials_repository_merge_update_sql():
     """The atomic merge must issue a single jsonb ||-based UPDATE scoped to the
     credential name, so concurrent patches to disjoint keys cannot overwrite

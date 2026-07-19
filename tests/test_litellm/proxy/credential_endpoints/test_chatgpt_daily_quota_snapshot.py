@@ -52,7 +52,7 @@ async def test_record_chatgpt_daily_quota_snapshots_uses_global_day_timezone():
             queried_at=1,
         )
 
-    def credential_refresher(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
+    async def credential_refresher(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
         assert credential.credential_name == "chatgpt-admin"
         assert user_id == "litellm_proxy"
         return {"api_key": "access-token", "chatgpt_account_id": "account-id"}
@@ -112,7 +112,7 @@ async def test_record_chatgpt_daily_quota_snapshots_keeps_latest_snapshot_when_h
             queried_at=1,
         )
 
-    def credential_refresher(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
+    async def credential_refresher(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
         return {"api_key": "access-token"}
 
     snapshots = await record_chatgpt_daily_quota_snapshots(
@@ -156,7 +156,7 @@ async def test_record_chatgpt_daily_quota_snapshots_updates_config_credential_ru
             queried_at=1,
         )
 
-    def credential_refresher(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
+    async def credential_refresher(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
         assert user_id == "litellm_proxy"
         return {"api_key": "access-token"}
 

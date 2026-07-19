@@ -2,8 +2,13 @@
 
 from typing import List, Optional
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.types.utils import CredentialItem
+
+_CREDENTIAL_VALUES_ADAPTER = TypeAdapter(dict[str, object])
+_CREDENTIAL_INFO_ADAPTER = TypeAdapter(dict[str, object])
 
 
 class CredentialAccessor:
@@ -15,37 +20,44 @@ class CredentialAccessor:
         )
 
     @staticmethod
-    def get_credential_values(credential_name: str) -> dict:
-        """Safe accessor for credentials."""
-
-        if not litellm.credential_list:
+    def get_credential_values(credential_name: str) -> dict[str, object]:
+        credential = CredentialAccessor.get_credential(credential_name)
+        if credential is None:
             return {}
-        for credential in litellm.credential_list:
-            if credential.credential_name == credential_name:
-                if (credential.credential_info or {}).get("custom_llm_provider") == "chatgpt":
-                    from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
-                        refresh_chatgpt_credential_if_needed,
-                    )
+        if (
+            _CREDENTIAL_INFO_ADAPTER.validate_python(credential.credential_info or {}).get("custom_llm_provider")
+            == "chatgpt"
+        ):
+            from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
+                refresh_chatgpt_credential_if_needed,
+            )
 
-                    return refresh_chatgpt_credential_if_needed(credential=credential)
-                return credential.credential_values.copy()
-        return {}
+            return refresh_chatgpt_credential_if_needed(credential=credential)
+        return _CREDENTIAL_VALUES_ADAPTER.validate_python(credential.credential_values or {})
 
     @staticmethod
-    def upsert_credentials(credentials: List[CredentialItem]):
-        """Add a credential to the list of credentials."""
+    async def get_credential_values_async(credential_name: str) -> dict[str, object]:
+        credential = CredentialAccessor.get_credential(credential_name)
+        if credential is None:
+            return {}
+        if (
+            _CREDENTIAL_INFO_ADAPTER.validate_python(credential.credential_info or {}).get("custom_llm_provider")
+            == "chatgpt"
+        ):
+            from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
+                async_refresh_chatgpt_credential_if_needed,
+            )
 
-        credential_names = [cred.credential_name for cred in litellm.credential_list]
+            return await async_refresh_chatgpt_credential_if_needed(credential=credential)
+        return _CREDENTIAL_VALUES_ADAPTER.validate_python(credential.credential_values or {})
 
-        for credential in credentials:
-            if credential.credential_name in credential_names:
-                # Find and replace the existing credential in the list
-                for i, existing_cred in enumerate(litellm.credential_list):
-                    if existing_cred.credential_name == credential.credential_name:
-                        litellm.credential_list[i] = credential
-                        break
-            else:
-                litellm.credential_list.append(credential)
+    @staticmethod
+    def upsert_credentials(credentials: List[CredentialItem]) -> None:
+        updates = {credential.credential_name: credential for credential in credentials}
+        retained = tuple(
+            credential for credential in litellm.credential_list if credential.credential_name not in updates
+        )
+        litellm.credential_list = [*retained, *updates.values()]
 
     @staticmethod
     def delete_credential(credential_name: str) -> None:

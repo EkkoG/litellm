@@ -11,7 +11,9 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_timezone
-from litellm.proxy.credential_endpoints.chatgpt_credential_utils import refresh_chatgpt_credential_if_needed
+from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
+    async_refresh_chatgpt_credential_if_needed,
+)
 from litellm.proxy.credential_endpoints.chatgpt_subscription import (
     CHATGPT_DAILY_QUOTA_SNAPSHOT_INFO_KEY,
     ChatGPTDailyQuotaSnapshot,
@@ -29,7 +31,7 @@ CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID = "chatgpt_daily_quota_snapshot_job"
 CHATGPT_DAILY_QUOTA_SNAPSHOT_LOCK_TTL_SECONDS = 300
 
 ChatGPTSnapshotStatusFetcher = Callable[[str, str, str | None], Awaitable[ChatGPTSubscriptionStatus]]
-ChatGPTCredentialRefresher = Callable[[CredentialItem, str | None], Mapping[str, object]]
+ChatGPTCredentialRefresher = Callable[[CredentialItem, str | None], Awaitable[Mapping[str, object]]]
 ChatGPTCredentialSource = Callable[[], Sequence[CredentialItem]]
 ChatGPTTimezoneProvider = Callable[[], str]
 ChatGPTNowProvider = Callable[[], datetime]
@@ -193,8 +195,8 @@ def _get_runtime_credentials() -> Sequence[CredentialItem]:
     return tuple(litellm.credential_list)
 
 
-def _refresh_chatgpt_credential(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
-    return refresh_chatgpt_credential_if_needed(credential=credential, user_id=user_id)
+async def _refresh_chatgpt_credential(credential: CredentialItem, user_id: str | None) -> Mapping[str, object]:
+    return await async_refresh_chatgpt_credential_if_needed(credential=credential, user_id=user_id)
 
 
 def _upsert_runtime_credentials(credentials: Sequence[CredentialItem]) -> None:
@@ -229,7 +231,7 @@ async def _record_chatgpt_daily_quota_snapshot(
     capture_time: datetime,
 ) -> ChatGPTDailyQuotaSnapshot | None:
     try:
-        credential_values = credential_refresher(credential, "litellm_proxy")
+        credential_values = await credential_refresher(credential, "litellm_proxy")
         access_token = get_chatgpt_access_token(credential_values)
         if access_token is None:
             return None
