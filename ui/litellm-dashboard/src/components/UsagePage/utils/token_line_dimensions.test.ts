@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   RATE_DIMENSIONS,
+  SPEND_DIMENSIONS,
   TOKEN_COUNT_DIMENSIONS,
   TOKEN_LINE_DIMENSIONS,
   formatTokenLineValue,
@@ -26,6 +27,7 @@ describe("TOKEN_LINE_DIMENSIONS", () => {
 
   it("reads existing daily metrics as token line values", () => {
     const byKey = Object.fromEntries(TOKEN_LINE_DIMENSIONS.map((dimension) => [dimension.key, dimension]));
+    expect(byKey["metrics.spend"].getValue(metrics)).toBe(1.5);
     expect(byKey["metrics.prompt_tokens"].getValue(metrics)).toBe(100000);
     expect(byKey["metrics.completion_tokens"].getValue(metrics)).toBe(25000);
     expect(byKey["metrics.total_tokens"].getValue(metrics)).toBe(125000);
@@ -52,10 +54,13 @@ describe("TOKEN_LINE_DIMENSIONS", () => {
     }
   });
 
-  it("partitions count and rate dimensions without overlap", () => {
-    expect(TOKEN_COUNT_DIMENSIONS.length + RATE_DIMENSIONS.length).toBe(TOKEN_LINE_DIMENSIONS.length);
+  it("partitions count, spend, and rate dimensions without overlap", () => {
+    expect(TOKEN_COUNT_DIMENSIONS.length + SPEND_DIMENSIONS.length + RATE_DIMENSIONS.length).toBe(
+      TOKEN_LINE_DIMENSIONS.length,
+    );
     expect(RATE_DIMENSIONS.every((dimension) => dimension.isRate)).toBe(true);
-    expect(TOKEN_COUNT_DIMENSIONS.every((dimension) => !dimension.isRate)).toBe(true);
+    expect(SPEND_DIMENSIONS.every((dimension) => dimension.isSpend)).toBe(true);
+    expect(TOKEN_COUNT_DIMENSIONS.every((dimension) => !dimension.isRate && !dimension.isSpend)).toBe(true);
   });
 });
 
@@ -68,5 +73,10 @@ describe("formatTokenLineValue", () => {
   it("formats token dimensions with comma separators", () => {
     const promptTokens = TOKEN_LINE_DIMENSIONS.find((dimension) => dimension.key === "metrics.prompt_tokens");
     expect(formatTokenLineValue(promptTokens!, 1234567)).toBe("1,234,567");
+  });
+
+  it("formats spend as currency", () => {
+    const spend = TOKEN_LINE_DIMENSIONS.find((dimension) => dimension.key === "metrics.spend");
+    expect(formatTokenLineValue(spend!, 1234.5)).toBe("$1,234.50");
   });
 });

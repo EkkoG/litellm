@@ -66,6 +66,7 @@ import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata, TopUserData } from "@/components/UsagePage/types";
 import {
   RATE_DIMENSIONS,
+  SPEND_DIMENSIONS,
   TOKEN_COUNT_DIMENSIONS,
   TOKEN_LINE_DIMENSIONS,
   formatTokenLineValue,
@@ -776,21 +777,15 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                       return (
                                         <div className="bg-white p-4 shadow-lg rounded-lg border">
                                           <p className="font-bold">{data.date}</p>
-                                          <p className="text-cyan-500">
-                                            Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                                          </p>
-                                          <p className="text-gray-600">
-                                            Requests: {data.metrics.api_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-gray-600">
-                                            Successful: {data.metrics.successful_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-gray-600">
-                                            Failed: {data.metrics.failed_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-gray-600">
-                                            Tokens: {data.metrics.total_tokens.toLocaleString()}
-                                          </p>
+                                          {TOKEN_LINE_DIMENSIONS.map((dimension) => (
+                                            <p
+                                              key={dimension.key}
+                                              style={{ color: `var(--color-${dimension.color}-600)` }}
+                                            >
+                                              {dimension.label}:{" "}
+                                              {formatTokenLineValue(dimension, dimension.getValue(data.metrics))}
+                                            </p>
+                                          ))}
                                         </div>
                                       );
                                     }}
@@ -823,6 +818,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                     tickFormatter={(value) => `${value}%`}
                                     domain={[0, 100]}
                                   />
+                                  <YAxis yAxisId="spend" hide tickFormatter={valueFormatterSpend} />
                                   <RechartsTooltip
                                     content={({ active, payload, label }) => {
                                       if (!active || !payload?.[0]) return null;
@@ -843,6 +839,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                     }}
                                   />
                                   <RechartsLegend verticalAlign="top" align="right" />
+                                  {SPEND_DIMENSIONS.map((dimension) => (
+                                    <Line
+                                      key={dimension.key}
+                                      yAxisId="spend"
+                                      type="linear"
+                                      dataKey={dimension.key}
+                                      name={dimension.label}
+                                      stroke={chartColorValue(dimension.color)}
+                                      strokeWidth={2}
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                  ))}
                                   {TOKEN_COUNT_DIMENSIONS.map((dimension) => (
                                     <Line
                                       key={dimension.key}

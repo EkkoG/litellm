@@ -8,9 +8,17 @@ export interface TokenLineDimension {
   color: ChartColor;
   getValue: (metrics: Partial<SpendMetrics>) => number;
   isRate?: boolean;
+  isSpend?: boolean;
 }
 
 export const TOKEN_LINE_DIMENSIONS: readonly TokenLineDimension[] = [
+  {
+    key: "metrics.spend",
+    label: "Spend",
+    color: "sky",
+    isSpend: true,
+    getValue: (metrics) => metrics.spend || 0,
+  },
   {
     key: "metrics.prompt_tokens",
     label: "Prompt Tokens",
@@ -72,9 +80,16 @@ export const TOKEN_LINE_DIMENSIONS: readonly TokenLineDimension[] = [
   },
 ];
 
-export const TOKEN_COUNT_DIMENSIONS = TOKEN_LINE_DIMENSIONS.filter((dimension) => !dimension.isRate);
+export const TOKEN_COUNT_DIMENSIONS = TOKEN_LINE_DIMENSIONS.filter(
+  (dimension) => !dimension.isRate && !dimension.isSpend,
+);
+
+export const SPEND_DIMENSIONS = TOKEN_LINE_DIMENSIONS.filter((dimension) => dimension.isSpend);
 
 export const RATE_DIMENSIONS = TOKEN_LINE_DIMENSIONS.filter((dimension) => dimension.isRate);
 
-export const formatTokenLineValue = (dimension: TokenLineDimension, value: number): string =>
-  dimension.isRate ? `${value.toFixed(1)}%` : formatNumberWithCommas(value, 0);
+export const formatTokenLineValue = (dimension: TokenLineDimension, value: number): string => {
+  if (dimension.isRate) return `${value.toFixed(1)}%`;
+  if (dimension.isSpend) return `$${formatNumberWithCommas(value, 2)}`;
+  return formatNumberWithCommas(value, 0);
+};
