@@ -24,6 +24,30 @@ export const TOKEN_LINE_DIMENSIONS: readonly TokenLineDimension[] = [
     getValue: (metrics) => metrics.completion_tokens || 0,
   },
   {
+    key: "metrics.total_tokens",
+    label: "Total Tokens",
+    color: "indigo",
+    getValue: (metrics) => metrics.total_tokens || 0,
+  },
+  {
+    key: "metrics.api_requests",
+    label: "Requests",
+    color: "amber",
+    getValue: (metrics) => metrics.api_requests || 0,
+  },
+  {
+    key: "metrics.successful_requests",
+    label: "Successful Requests",
+    color: "lime",
+    getValue: (metrics) => metrics.successful_requests || 0,
+  },
+  {
+    key: "metrics.failed_requests",
+    label: "Failed Requests",
+    color: "red",
+    getValue: (metrics) => metrics.failed_requests || 0,
+  },
+  {
     key: "metrics.cache_read_input_tokens",
     label: "Cached Tokens",
     color: "green",
@@ -47,6 +71,10 @@ export const TOKEN_LINE_DIMENSIONS: readonly TokenLineDimension[] = [
     },
   },
 ];
+
+export const TOKEN_COUNT_DIMENSIONS = TOKEN_LINE_DIMENSIONS.filter((dimension) => !dimension.isRate);
+
+export const RATE_DIMENSIONS = TOKEN_LINE_DIMENSIONS.filter((dimension) => dimension.isRate);
 
 export const formatTokenLineValue = (dimension: TokenLineDimension, value: number): string =>
   dimension.isRate ? `${value.toFixed(1)}%` : formatNumberWithCommas(value, 0);

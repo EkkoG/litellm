@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { TOKEN_LINE_DIMENSIONS, formatTokenLineValue } from "./token_line_dimensions";
+import {
+  RATE_DIMENSIONS,
+  TOKEN_COUNT_DIMENSIONS,
+  TOKEN_LINE_DIMENSIONS,
+  formatTokenLineValue,
+} from "./token_line_dimensions";
 
 describe("TOKEN_LINE_DIMENSIONS", () => {
   const metrics = {
@@ -19,10 +24,14 @@ describe("TOKEN_LINE_DIMENSIONS", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("reads token counts from daily metrics", () => {
+  it("reads existing daily metrics as token line values", () => {
     const byKey = Object.fromEntries(TOKEN_LINE_DIMENSIONS.map((dimension) => [dimension.key, dimension]));
     expect(byKey["metrics.prompt_tokens"].getValue(metrics)).toBe(100000);
     expect(byKey["metrics.completion_tokens"].getValue(metrics)).toBe(25000);
+    expect(byKey["metrics.total_tokens"].getValue(metrics)).toBe(125000);
+    expect(byKey["metrics.api_requests"].getValue(metrics)).toBe(10);
+    expect(byKey["metrics.successful_requests"].getValue(metrics)).toBe(9);
+    expect(byKey["metrics.failed_requests"].getValue(metrics)).toBe(1);
     expect(byKey["metrics.cache_read_input_tokens"].getValue(metrics)).toBe(60000);
     expect(byKey["metrics.cache_creation_input_tokens"].getValue(metrics)).toBe(5000);
   });
@@ -41,6 +50,12 @@ describe("TOKEN_LINE_DIMENSIONS", () => {
     for (const dimension of TOKEN_LINE_DIMENSIONS) {
       expect(dimension.getValue({})).toBe(0);
     }
+  });
+
+  it("partitions count and rate dimensions without overlap", () => {
+    expect(TOKEN_COUNT_DIMENSIONS.length + RATE_DIMENSIONS.length).toBe(TOKEN_LINE_DIMENSIONS.length);
+    expect(RATE_DIMENSIONS.every((dimension) => dimension.isRate)).toBe(true);
+    expect(TOKEN_COUNT_DIMENSIONS.every((dimension) => !dimension.isRate)).toBe(true);
   });
 });
 

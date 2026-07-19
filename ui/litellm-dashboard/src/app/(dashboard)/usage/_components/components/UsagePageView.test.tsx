@@ -676,7 +676,7 @@ describe("UsagePage", () => {
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
-  it("should display provider prompt caching metrics as trend lines on the Daily Spend chart", async () => {
+  it("should not render the removed daily spend cache table", async () => {
     mockUserDailyActivityAggregatedCall.mockResolvedValue({
       ...mockSpendData,
       results: [
@@ -698,34 +698,9 @@ describe("UsagePage", () => {
     });
 
     expect(screen.queryByRole("table", { name: "Daily Spend" })).not.toBeInTheDocument();
-    expect(screen.getByText("Cached Tokens")).toBeInTheDocument();
-    expect(screen.getByText("Cache Hit Rate")).toBeInTheDocument();
   });
 
-  it("should not produce NaN line values when a day has no prompt tokens", async () => {
-    mockUserDailyActivityAggregatedCall.mockResolvedValue({
-      ...mockSpendData,
-      results: [
-        {
-          ...mockSpendData.results[0],
-          metrics: {
-            ...mockSpendData.results[0].metrics,
-            prompt_tokens: 0,
-            cache_read_input_tokens: 0,
-          },
-        },
-      ],
-    });
-
-    renderWithProviders(<UsagePage {...defaultProps} />);
-
-    await waitFor(() => {
-      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
-    });
-    expect(screen.queryByText(/(?:NaN|Infinity)%/)).not.toBeInTheDocument();
-  });
-
-  it("should render the cache hit rate trend line alongside the token trend lines", async () => {
+  it("should show the spend bar chart by default and switch to the trend line view on toggle click", async () => {
     const twoDays = [
       {
         ...mockSpendData.results[0],
@@ -753,6 +728,15 @@ describe("UsagePage", () => {
     const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
 
     await waitFor(() => {
+      expect(container.querySelectorAll("path.recharts-rectangle").length).toBeGreaterThan(0);
+    });
+    expect(container.querySelector("path.recharts-line-curve")).toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Line"));
+    });
+
+    await waitFor(() => {
       expect(container.querySelectorAll("path.recharts-line-curve")).toHaveLength(TOKEN_LINE_DIMENSIONS.length);
     });
 
@@ -764,6 +748,18 @@ describe("UsagePage", () => {
         (dimension) => `var(--color-${dimension.color}-500, ${CHART_COLOR_HEX[dimension.color]})`,
       ),
     );
+
+    expect(screen.getByText("Cached Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Cache Hit Rate")).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Bar"));
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector("path.recharts-line-curve")).toBeNull();
+    });
+    expect(container.querySelectorAll("path.recharts-rectangle").length).toBeGreaterThan(0);
   });
 
   it("should switch between usage views correctly", async () => {
