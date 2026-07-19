@@ -249,8 +249,9 @@ describe("ModelsAndEndpointsView", () => {
       credentialsTab.click();
     });
 
-    expect(await findByText("Configured credentials for different AI providers. Add and manage your API credentials."))
-      .toBeInTheDocument();
+    expect(
+      await findByText("Configured credentials for different AI providers. Add and manage your API credentials."),
+    ).toBeInTheDocument();
     expect(getAllByRole("columnheader", { name: "Status" }).length).toBeGreaterThan(0);
   });
 });

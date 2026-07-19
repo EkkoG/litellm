@@ -8,6 +8,8 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "@/../tests/test-utils";
 import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
+import { CHART_COLOR_HEX } from "@/components/shared/charts";
+import { TOKEN_LINE_DIMENSIONS } from "@/components/UsagePage/utils/token_line_dimensions";
 import UsagePage from "./UsagePageView";
 
 // Polyfill ResizeObserver for test environment
@@ -674,7 +676,7 @@ describe("UsagePage", () => {
     expect(screen.getAllByText("gpt-4").length).toBeGreaterThan(0);
   });
 
-  it("should display provider prompt caching metrics for each day in Daily Spend", async () => {
+  it("should not render the removed daily spend cache table", async () => {
     mockUserDailyActivityAggregatedCall.mockResolvedValue({
       ...mockSpendData,
       results: [
@@ -691,32 +693,73 @@ describe("UsagePage", () => {
 
     renderWithProviders(<UsagePage {...defaultProps} />);
 
-    const dailySpendTable = await screen.findByRole("table", { name: "Daily Spend" });
-    expect(within(dailySpendTable).getByText("2025-01-01")).toBeInTheDocument();
-    expect(within(dailySpendTable).getByText("25.0%")).toBeInTheDocument();
-    expect(within(dailySpendTable).getByText("12,500")).toBeInTheDocument();
-  });
-
-  it("should display no daily prompt cache hit rate when a day has no prompt tokens", async () => {
-    mockUserDailyActivityAggregatedCall.mockResolvedValue({
-      ...mockSpendData,
-      results: [
-        {
-          ...mockSpendData.results[0],
-          metrics: {
-            ...mockSpendData.results[0].metrics,
-            prompt_tokens: 0,
-            cache_read_input_tokens: 0,
-          },
-        },
-      ],
+    await waitFor(() => {
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    renderWithProviders(<UsagePage {...defaultProps} />);
+    expect(screen.queryByRole("table", { name: "Daily Spend" })).not.toBeInTheDocument();
+  });
 
-    const dailySpendTable = await screen.findByRole("table", { name: "Daily Spend" });
-    expect(within(dailySpendTable).getByText("-")).toBeInTheDocument();
-    expect(within(dailySpendTable).queryByText(/(?:NaN|Infinity)%/)).not.toBeInTheDocument();
+  it("should show the spend bar chart by default and switch to the trend line view on toggle click", async () => {
+    const twoDays = [
+      {
+        ...mockSpendData.results[0],
+        metrics: {
+          ...mockSpendData.results[0].metrics,
+          prompt_tokens: 50000,
+          cache_read_input_tokens: 12500,
+        },
+      },
+      {
+        ...mockSpendData.results[0],
+        date: "2025-01-02",
+        metrics: {
+          ...mockSpendData.results[0].metrics,
+          prompt_tokens: 50000,
+          cache_read_input_tokens: 25000,
+        },
+      },
+    ];
+    mockUserDailyActivityAggregatedCall.mockResolvedValue({
+      ...mockSpendData,
+      results: twoDays,
+    });
+
+    const { container } = renderWithProviders(<UsagePage {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("path.recharts-rectangle").length).toBeGreaterThan(0);
+    });
+    expect(container.querySelector("path.recharts-line-curve")).toBeNull();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Line"));
+    });
+
+    await waitFor(() => {
+      expect(container.querySelectorAll("path.recharts-line-curve")).toHaveLength(TOKEN_LINE_DIMENSIONS.length);
+    });
+
+    const strokes = Array.from(container.querySelectorAll("path.recharts-line-curve")).map((curve) =>
+      curve.getAttribute("stroke"),
+    );
+    expect(strokes).toEqual(
+      TOKEN_LINE_DIMENSIONS.map(
+        (dimension) => `var(--color-${dimension.color}-500, ${CHART_COLOR_HEX[dimension.color]})`,
+      ),
+    );
+
+    expect(screen.getByText("Cached Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Cache Hit Rate")).toBeInTheDocument();
+
+    act(() => {
+      fireEvent.click(screen.getByText("Bar"));
+    });
+
+    await waitFor(() => {
+      expect(container.querySelector("path.recharts-line-curve")).toBeNull();
+    });
+    expect(container.querySelectorAll("path.recharts-rectangle").length).toBeGreaterThan(0);
   });
 
   it("should switch between usage views correctly", async () => {

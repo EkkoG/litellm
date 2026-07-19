@@ -27,7 +27,17 @@ import { Alert, Button, Segmented, Select, Tooltip, Typography } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 
 import { BarChart } from "@/components/shared/charts";
+import { chartColorValue } from "@/components/shared/charts/colors";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  Legend as RechartsLegend,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -54,8 +64,14 @@ import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata, TopUserData } from "@/components/UsagePage/types";
+import {
+  RATE_DIMENSIONS,
+  SPEND_DIMENSIONS,
+  TOKEN_COUNT_DIMENSIONS,
+  TOKEN_LINE_DIMENSIONS,
+  formatTokenLineValue,
+} from "@/components/UsagePage/utils/token_line_dimensions";
 import { formatPromptCacheHitRate, valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
-import { DailySpendTable } from "./DailySpendTable";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import SpendByProvider from "./EntityUsage/SpendByProvider";
@@ -157,6 +173,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [topUsersLimit, setTopUsersLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
+  const [dailyChartView, setDailyChartView] = useState<"bar" | "line">("bar");
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -457,6 +474,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [userSpendData.results],
   );
+  const dailyChartData = useMemo(
+    () =>
+      sortedDailyResults.map((day) => ({
+        ...day,
+        ...Object.fromEntries(
+          TOKEN_LINE_DIMENSIONS.map((dimension) => [dimension.key, dimension.getValue(day.metrics)]),
+        ),
+      })),
+    [sortedDailyResults],
+  );
   const modelMetrics = useMemo(() => processActivityData(userSpendData, "models", teams), [userSpendData, teams]);
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
   const mcpServerMetrics = useMemo(
@@ -716,41 +743,144 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Col numColSpan={2}>
                         <ShadcnCard>
                           <CardHeader>
-                            <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                              <Segmented
+                                size="small"
+                                options={[
+                                  { label: "Bar", value: "bar" },
+                                  { label: "Line", value: "line" },
+                                ]}
+                                value={dailyChartView}
+                                onChange={(value) => setDailyChartView(value as "bar" | "line")}
+                              />
+                            </div>
                           </CardHeader>
                           <CardContent>
-                            {loading ? (
-                              <ChartLoader isDateChanging={isDateChanging} />
-                            ) : (
-                              <>
-                                <BarChart
-                                  data={sortedDailyResults}
-                                  index="date"
-                                  categories={["metrics.spend"]}
-                                  colors={["cyan"]}
-                                  valueFormatter={valueFormatterSpend}
-                                  yAxisWidth={100}
-                                  showLegend={false}
-                                  customTooltip={({ payload, active }) => {
-                                    if (!active || !payload?.[0]) return null;
-                                    const data = payload[0].payload;
-                                    return (
-                                      <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                        <p className="font-bold">{data.date}</p>
-                                        <p className="text-cyan-500">
-                                          Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                                        </p>
-                                        <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                        <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                        <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                        <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                                      </div>
-                                    );
-                                  }}
-                                />
-                                <DailySpendTable data={sortedDailyResults} />
-                              </>
-                            )}
+                            {(() => {
+                              if (loading) {
+                                return <ChartLoader isDateChanging={isDateChanging} />;
+                              }
+                              if (dailyChartView === "bar") {
+                                return (
+                                  <BarChart
+                                    data={sortedDailyResults}
+                                    index="date"
+                                    categories={["metrics.spend"]}
+                                    colors={["cyan"]}
+                                    valueFormatter={valueFormatterSpend}
+                                    yAxisWidth={100}
+                                    showLegend={false}
+                                    customTooltip={({ payload, active }) => {
+                                      if (!active || !payload?.[0]) return null;
+                                      const data = payload[0].payload;
+                                      return (
+                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                          <p className="font-bold">{data.date}</p>
+                                          {TOKEN_LINE_DIMENSIONS.map((dimension) => (
+                                            <p
+                                              key={dimension.key}
+                                              style={{ color: `var(--color-${dimension.color}-600)` }}
+                                            >
+                                              {dimension.label}:{" "}
+                                              {formatTokenLineValue(dimension, dimension.getValue(data.metrics))}
+                                            </p>
+                                          ))}
+                                        </div>
+                                      );
+                                    }}
+                                  />
+                                );
+                              }
+                              return (
+                                <ComposedChart width={800} height={320} data={dailyChartData} style={{ width: "100%" }}>
+                                  <CartesianGrid vertical={false} />
+                                  <XAxis
+                                    dataKey="date"
+                                    tickLine={false}
+                                    axisLine={false}
+                                    minTickGap={5}
+                                    interval="equidistantPreserveStart"
+                                  />
+                                  <YAxis
+                                    yAxisId="count"
+                                    width={80}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    tickFormatter={(value) => formatNumberWithCommas(value, 0)}
+                                  />
+                                  <YAxis
+                                    yAxisId="rate"
+                                    orientation="right"
+                                    width={48}
+                                    tickLine={false}
+                                    axisLine={false}
+                                    tickFormatter={(value) => `${value}%`}
+                                    domain={[0, 100]}
+                                  />
+                                  <YAxis yAxisId="spend" hide tickFormatter={valueFormatterSpend} />
+                                  <RechartsTooltip
+                                    content={({ active, payload, label }) => {
+                                      if (!active || !payload?.[0]) return null;
+                                      const data = payload[0].payload;
+                                      return (
+                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
+                                          <p className="font-bold">{label}</p>
+                                          {TOKEN_LINE_DIMENSIONS.map((dimension) => (
+                                            <p
+                                              key={dimension.key}
+                                              style={{ color: `var(--color-${dimension.color}-600)` }}
+                                            >
+                                              {dimension.label}: {formatTokenLineValue(dimension, data[dimension.key])}
+                                            </p>
+                                          ))}
+                                        </div>
+                                      );
+                                    }}
+                                  />
+                                  <RechartsLegend verticalAlign="top" align="right" />
+                                  {SPEND_DIMENSIONS.map((dimension) => (
+                                    <Line
+                                      key={dimension.key}
+                                      yAxisId="spend"
+                                      type="linear"
+                                      dataKey={dimension.key}
+                                      name={dimension.label}
+                                      stroke={chartColorValue(dimension.color)}
+                                      strokeWidth={2}
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                  ))}
+                                  {TOKEN_COUNT_DIMENSIONS.map((dimension) => (
+                                    <Line
+                                      key={dimension.key}
+                                      yAxisId="count"
+                                      type="linear"
+                                      dataKey={dimension.key}
+                                      name={dimension.label}
+                                      stroke={chartColorValue(dimension.color)}
+                                      strokeWidth={2}
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                  ))}
+                                  {RATE_DIMENSIONS.map((dimension) => (
+                                    <Line
+                                      key={dimension.key}
+                                      yAxisId="rate"
+                                      type="linear"
+                                      dataKey={dimension.key}
+                                      name={dimension.label}
+                                      stroke={chartColorValue(dimension.color)}
+                                      strokeWidth={2}
+                                      dot={false}
+                                      isAnimationActive={false}
+                                    />
+                                  ))}
+                                </ComposedChart>
+                              );
+                            })()}
                           </CardContent>
                         </ShadcnCard>
                       </Col>
