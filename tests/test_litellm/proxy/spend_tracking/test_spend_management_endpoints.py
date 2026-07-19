@@ -555,6 +555,105 @@ def reset_proxy_auth_globals(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_enriches_user_alias(monkeypatch):
+    class FakeUserTable:
+        def __init__(self, records):
+            self._records = records
+            self.calls = []
+
+        async def find_many(self, where=None, **kwargs):
+            self.calls.append(where)
+            return self._records
+
+    records = [
+        MagicMock(user_id="u1", user_alias="alice"),
+        MagicMock(user_id="u2", user_alias=None),
+    ]
+    fake_table = FakeUserTable(records)
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_usertable = fake_table
+
+    data = [
+        {"request_id": "r1", "user": "u1", "session_id": None},
+        {"request_id": "r2", "user": "u2", "session_id": None},
+        {"request_id": "r3", "user": None, "session_id": None},
+    ]
+
+    result = await spend_management_endpoints._build_ui_spend_logs_response(
+        fake_prisma,
+        [dict(d) for d in data],
+        total_records=3,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    returned = result["data"]
+    assert returned[0]["user_alias"] == "alice"
+    assert "user_alias" not in returned[1]
+    assert "user_alias" not in returned[2]
+    assert fake_table.calls[0] == {"user_id": {"in": ["u1", "u2"]}}
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_session_rows_include_user_aliases(monkeypatch):
+    class FakeUserTable:
+        async def find_many(self, where=None, **kwargs):
+            return [MagicMock(user_id="u1", user_alias="alice")]
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_usertable = FakeUserTable()
+
+    session_rows = [
+        {
+            "row_type": "session",
+            "users": ["u1", "u2"],
+        }
+    ]
+
+    result = await spend_management_endpoints._build_ui_spend_logs_response(
+        fake_prisma,
+        [dict(r) for r in session_rows],
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    returned = result["data"][0]
+    assert returned["user_aliases"] == [
+        {"user_id": "u1", "user_alias": "alice"},
+        {"user_id": "u2", "user_alias": None},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_build_ui_spend_logs_response_user_alias_lookup_failure_is_safe(monkeypatch):
+    class BrokenUserTable:
+        async def find_many(self, where=None, **kwargs):
+            raise RuntimeError("db down")
+
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_usertable = BrokenUserTable()
+
+    data = [{"request_id": "r1", "user": "u1", "session_id": None}]
+
+    result = await spend_management_endpoints._build_ui_spend_logs_response(
+        fake_prisma,
+        [dict(d) for d in data],
+        total_records=1,
+        page=1,
+        page_size=50,
+        total_pages=1,
+        enrich_session_counts=True,
+    )
+
+    assert "user_alias" not in result["data"][0]
+
+
+@pytest.mark.asyncio
 async def test_ui_view_spend_logs_with_user_id(client, monkeypatch):
     mock_spend_logs = [
         {

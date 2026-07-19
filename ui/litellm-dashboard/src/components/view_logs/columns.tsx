@@ -37,6 +37,12 @@ const getLogoUrl = (row: LogEntry, provider: string) => {
   return provider ? getProviderLogoAndName(provider).logo : "";
 };
 
+export const formatUserDisplay = (userId?: string, userAlias?: string | null): string => {
+  if (!userId) return "-";
+  if (!userAlias || userAlias === userId) return userId;
+  return `${userAlias} (${userId})`;
+};
+
 export type LogEntry = {
   request_id: string;
   api_key: string;
@@ -52,6 +58,7 @@ export type LogEntry = {
   startTime: string;
   endTime: string;
   user?: string;
+  user_alias?: string;
   end_user?: string;
   custom_llm_provider?: string;
   metadata?: Record<string, any>;
@@ -399,11 +406,14 @@ export const createColumns = (sortProps?: LogsSortProps): ColumnDef<LogEntry>[] 
     header: "Internal User",
     accessorKey: "user",
     size: 150,
-    cell: (info: any) => (
-      <Tooltip title={String(info.getValue() || "-")}>
-        <span className="max-w-[15ch] truncate block">{String(info.getValue() || "-")}</span>
-      </Tooltip>
-    ),
+    cell: (info: any) => {
+      const display = formatUserDisplay(info.getValue(), info.row.original.user_alias);
+      return (
+        <Tooltip title={display}>
+          <span className="max-w-[15ch] truncate block">{display}</span>
+        </Tooltip>
+      );
+    },
   },
   {
     header: "End User",

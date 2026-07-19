@@ -33,6 +33,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -3440,6 +3441,57 @@ async def ui_view_session_spend_logs(
             )
 
 
+async def _fetch_user_aliases_by_id(prisma_client: "PrismaClient", user_ids: list[str]) -> dict[str, str]:
+    """
+    Batch-lookup the `user_alias` for the given user_ids. Returns a map of
+    user_id -> user_alias, excluding users with no alias set.
+    """
+    aliases: dict[str, str] = {}
+    if not user_ids:
+        return aliases
+    try:
+        user_records = await UserRepository(prisma_client).table.find_many(where={"user_id": {"in": user_ids}})
+        for record in user_records:
+            user_alias = getattr(record, "user_alias", None)
+            record_user_id = getattr(record, "user_id", None)
+            if user_alias and record_user_id:
+                aliases[str(record_user_id)] = str(user_alias)
+    except Exception:  # noqa: BLE001  # alias lookup is best-effort; failure must not break the logs endpoint
+        verbose_proxy_logger.debug(
+            "Failed to fetch user aliases for spend logs UI",
+            exc_info=True,
+        )
+    return aliases
+
+
+async def _enrich_rows_with_user_aliases(prisma_client: "PrismaClient", data: list, session_rows: bool) -> None:
+    if session_rows:
+        all_user_ids = sorted({str(user_id) for row in data for user_id in (row.get("users") or []) if user_id})
+        user_alias_map = await _fetch_user_aliases_by_id(prisma_client, all_user_ids)
+        for row in data:
+            row["user_aliases"] = [
+                {"user_id": user_id, "user_alias": user_alias_map.get(user_id)}
+                for user_id in (row.get("users") or [])
+                if user_id
+            ]
+    else:
+        row_user_ids = sorted(
+            {
+                str(user_id)
+                for row in data
+                for user_id in [row.get("user") if isinstance(row, dict) else getattr(row, "user", None)]
+                if user_id
+            }
+        )
+        user_alias_map = await _fetch_user_aliases_by_id(prisma_client, row_user_ids)
+        for row in data:
+            row_user_id = row.get("user") if isinstance(row, dict) else getattr(row, "user", None)
+            if row_user_id:
+                alias = user_alias_map.get(str(row_user_id))
+                if alias:
+                    row["user_alias"] = alias
+
+
 async def _build_ui_spend_logs_response(
     prisma_client: "PrismaClient",
     data: list,
@@ -3480,7 +3532,11 @@ async def _build_ui_spend_logs_response(
         A dict with ``data`` (enriched rows), ``total``, ``page``,
         ``page_size``, ``total_pages``, and ``total_is_capped``.
     """
-    if enrich_session_counts and all(isinstance(row, dict) and row.get("row_type") for row in data):
+    session_rows = bool(enrich_session_counts and all(isinstance(row, dict) and row.get("row_type") for row in data))
+
+    await _enrich_rows_with_user_aliases(prisma_client, data, session_rows)
+
+    if session_rows:
         return {
             "data": data,
             "total": total_records,

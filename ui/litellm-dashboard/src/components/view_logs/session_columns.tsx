@@ -2,7 +2,12 @@ import { DateCell, IdCell, MoneyCell, StatusBadge } from "@/components/shared/ta
 import type { ColumnDef } from "@tanstack/react-table";
 import { Tooltip } from "antd";
 import { AgentIcon, SparkleIcon, WrenchIcon } from "./TypeBadges";
-import { LogsSortProps, SortableHeader } from "./columns";
+import { LogsSortProps, SortableHeader, formatUserDisplay } from "./columns";
+
+export interface UserAliasEntry {
+  user_id: string;
+  user_alias: string | null;
+}
 
 export interface SessionLogEntry {
   row_type: "session" | "request";
@@ -29,6 +34,7 @@ export interface SessionLogEntry {
   team_ids: string[] | null;
   api_keys: string[] | null;
   users: string[] | null;
+  user_aliases: UserAliasEntry[] | null;
   end_users: string[] | null;
   team_names: string[] | null;
   key_aliases: string[] | null;
@@ -214,6 +220,13 @@ export const createSessionColumns = (sortProps: LogsSortProps): ColumnDef<Sessio
     header: "Internal Users",
     id: "users",
     size: 150,
-    cell: ({ row }) => <MultiValueCell values={row.original.users} />,
+    cell: ({ row }) => {
+      const aliases = row.original.user_aliases;
+      const values =
+        aliases && aliases.length > 0
+          ? aliases.map((entry) => formatUserDisplay(entry.user_id, entry.user_alias))
+          : row.original.users;
+      return <MultiValueCell values={values} />;
+    },
   },
 ];
