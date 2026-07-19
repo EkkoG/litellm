@@ -46,6 +46,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIStreamEvents,
 )
+from litellm.types.responses.main import GenericResponseOutputItem
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
@@ -751,6 +752,37 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return []
 
+    @staticmethod
+    def _coerce_recovered_output_items(
+        output_items: List[Any],
+        response_status: str | None,
+    ) -> List[Any]:
+        """Recovered SSE items are raw dicts that bypass Pydantic union
+        validation; coerce the message/reasoning shapes into
+        GenericResponseOutputItem so the typed conversion path keeps their
+        status and reasoning instead of dropping them."""
+        coerced: List[Any] = []
+        for item in output_items:
+            if not isinstance(item, dict) or item.get("type") not in ("message", "reasoning"):
+                coerced.append(item)
+                continue
+            payload: Dict[str, Any] = dict(item)
+            payload.setdefault("role", "assistant")
+            if isinstance(payload.get("content"), list):
+                payload["content"] = [
+                    {**content_item, "annotations": content_item.get("annotations")}
+                    if isinstance(content_item, dict)
+                    else content_item
+                    for content_item in payload["content"]
+                ]
+            if response_status and payload.get("status") == "completed":
+                payload["status"] = response_status
+            try:
+                coerced.append(GenericResponseOutputItem.model_validate(payload))
+            except Exception:
+                coerced.append(item)
+        return coerced
+
     @classmethod
     def _recover_output_items_from_logging(cls, logging_obj: "LiteLLMLoggingObj") -> List[Dict[str, Any]]:
         model_call_details = getattr(logging_obj, "model_call_details", {}) or {}
@@ -791,8 +823,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             )
             recovered_output_items = self._recover_output_items_from_logging(logging_obj)
             if recovered_output_items:
-                output_items = cast(Any, recovered_output_items)
-                raw_response.output = cast(Any, recovered_output_items)
+                coerced_items = self._coerce_recovered_output_items(
+                    recovered_output_items,
+                    response_status=getattr(raw_response, "status", None),
+                )
+                output_items = cast(Any, coerced_items)
+                raw_response.output = cast(Any, coerced_items)
                 verbose_logger.warning(
                     "Recovered empty Responses API output from raw SSE for model=%s",
                     model,
@@ -1424,8 +1460,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                         )
                     ]
                 )
-        elif event_type == "response.completed":
-            # Response is fully complete - now we can signal is_finished=True
+        elif event_type in ("response.completed", "response.incomplete"):
+            # Response is finished - now we can signal is_finished=True
             # This ensures we don't prematurely end the stream before tool_calls arrive
 
             # Check if response contains function_call items in output
@@ -1437,7 +1473,12 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 item.get("type") == "function_call" for item in output_items if isinstance(item, dict)
             )
 
-            finish_reason = "tool_calls" if has_function_calls else "stop"
+            if event_type == "response.incomplete":
+                finish_reason = LiteLLMResponsesTransformationHandler._map_responses_status_to_finish_reason(
+                    "incomplete"
+                )
+            else:
+                finish_reason = "tool_calls" if has_function_calls else "stop"
 
             # Extract reasoning items with encrypted_content for round-tripping
             completed_reasoning_items: Optional[List[Dict[str, Any]]] = None

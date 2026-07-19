@@ -401,7 +401,7 @@ class TestBaseResponsesAPIStreamingIterator:
 
         assert [item["id"] for item in terminal_response.output] == ["valid"]
 
-    def test_process_chunk_does_not_backfill_incomplete_response(self):
+    def test_process_chunk_backfills_incomplete_response(self):
         mock_response = Mock()
         mock_response.headers = {}
         mock_logging_obj = Mock(spec=LiteLLMLoggingObj)
@@ -442,7 +442,8 @@ class TestBaseResponsesAPIStreamingIterator:
         )
         iterator._process_chunk(json.dumps({"type": "response.incomplete", "response": {"output": []}}))
 
-        assert incomplete_response.output == []
+        assert [item["type"] for item in incomplete_response.output] == ["message"]
+        assert incomplete_response.output[0]["content"][0]["text"] == "partial"
 
     def test_process_chunk_does_not_backfill_failed_response(self):
         mock_response = Mock()

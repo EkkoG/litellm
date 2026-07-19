@@ -331,7 +331,11 @@ class BaseResponsesAPIStreamingIterator:
                         for _, item in sorted({**self._streamed_text_only_items, **self._streamed_output_items}.items())
                     ]
                     if (
-                        _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+                        _chunk_type
+                        in (
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+                            openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
+                        )
                         and response_obj is not None
                         and not response_output
                         and recovered_output

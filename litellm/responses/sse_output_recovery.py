@@ -53,6 +53,8 @@ def record_output_item_chunk(
         if output_index_raw is None:
             raise ValueError("missing output_index")
         output_index = int(output_index_raw)
+        if output_index < 0:
+            raise ValueError("negative output_index")
     except (TypeError, ValueError):
         output_index = len(output_items)
     output_items[output_index] = item
@@ -76,6 +78,8 @@ def record_output_text_chunk(
         if output_index_raw is None:
             raise ValueError("missing output_index")
         output_index = int(output_index_raw)
+        if output_index < 0:
+            raise ValueError("negative output_index")
     except (TypeError, ValueError):
         output_index = len(text_only_items)
 
