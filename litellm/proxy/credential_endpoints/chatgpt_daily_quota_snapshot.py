@@ -26,6 +26,7 @@ from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.types.utils import CredentialItem
 
 CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID = "chatgpt_daily_quota_snapshot_job"
+CHATGPT_DAILY_QUOTA_SNAPSHOT_LOCK_TTL_SECONDS = 300
 
 ChatGPTSnapshotStatusFetcher = Callable[[str, str, str | None], Awaitable[ChatGPTSubscriptionStatus]]
 ChatGPTCredentialRefresher = Callable[[CredentialItem, str | None], Mapping[str, object]]
@@ -33,6 +34,14 @@ ChatGPTCredentialSource = Callable[[], Sequence[CredentialItem]]
 ChatGPTTimezoneProvider = Callable[[], str]
 ChatGPTNowProvider = Callable[[], datetime]
 ChatGPTRuntimeCredentialUpsert = Callable[[Sequence[CredentialItem]], None]
+
+
+class ChatGPTSnapshotLockManager(Protocol):
+    redis_cache: object
+
+    async def acquire_lock(self, cronjob_id: str, ttl: int | None = None) -> bool | None: ...
+
+    async def release_lock(self, cronjob_id: str) -> object: ...
 
 
 class ChatGPTSnapshotRecorder(Protocol):
@@ -63,6 +72,7 @@ class ChatGPTSnapshotScheduler(Protocol):
                 ChatGPTSnapshotRecorder,
                 ChatGPTTimezoneProvider,
                 ChatGPTNowProvider,
+                ChatGPTSnapshotLockManager | None,
             ],
             Awaitable[None],
         ],
@@ -121,6 +131,7 @@ def schedule_chatgpt_daily_quota_snapshot_job(
     recorder: ChatGPTSnapshotRecorder | None = None,
     timezone_provider: ChatGPTTimezoneProvider | None = None,
     now_provider: ChatGPTNowProvider | None = None,
+    pod_lock_manager: ChatGPTSnapshotLockManager | None = None,
 ) -> None:
     scheduler.add_job(
         _run_scheduled_chatgpt_daily_quota_snapshot,
@@ -134,6 +145,7 @@ def schedule_chatgpt_daily_quota_snapshot_job(
             recorder or record_chatgpt_daily_quota_snapshots,
             timezone_provider or get_budget_reset_timezone,
             now_provider or _utc_now,
+            pod_lock_manager,
         ],
         id=CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID,
         replace_existing=True,
@@ -147,18 +159,34 @@ async def _run_scheduled_chatgpt_daily_quota_snapshot(
     recorder: ChatGPTSnapshotRecorder,
     timezone_provider: ChatGPTTimezoneProvider,
     now_provider: ChatGPTNowProvider,
+    pod_lock_manager: ChatGPTSnapshotLockManager | None = None,
 ) -> None:
     capture_time = now_provider()
     timezone_name = timezone_provider()
     local_time = capture_time.astimezone(ZoneInfo(timezone_name))
     if local_time.hour != 0 or local_time.minute != 0:
         return
-    await recorder(
-        credentials=credential_source(),
-        repository=repository,
-        history_store=history_store,
-        timezone_name=timezone_name,
-    )
+    lock_acquired = False
+    if pod_lock_manager is not None and pod_lock_manager.redis_cache is not None:
+        lock_acquired = bool(
+            await pod_lock_manager.acquire_lock(
+                cronjob_id=CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID,
+                ttl=CHATGPT_DAILY_QUOTA_SNAPSHOT_LOCK_TTL_SECONDS,
+            )
+        )
+        if not lock_acquired:
+            verbose_proxy_logger.debug("Skipping ChatGPT daily quota snapshot; another pod holds the lock")
+            return
+    try:
+        await recorder(
+            credentials=credential_source(),
+            repository=repository,
+            history_store=history_store,
+            timezone_name=timezone_name,
+        )
+    finally:
+        if lock_acquired and pod_lock_manager is not None:
+            await pod_lock_manager.release_lock(cronjob_id=CHATGPT_DAILY_QUOTA_SNAPSHOT_JOB_ID)
 
 
 def _get_runtime_credentials() -> Sequence[CredentialItem]:

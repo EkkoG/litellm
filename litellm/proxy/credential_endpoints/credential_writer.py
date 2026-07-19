@@ -40,6 +40,37 @@ class CredentialNotFound:
 CredentialSaveResult = Union[CredentialSaved, CredentialConflict, CredentialNotFound]
 
 
+def update_db_credential(
+    db_credential: CredentialItem,
+    updated_patch: CredentialItem,
+    new_encryption_key: str | None = None,
+) -> CredentialItem:
+    merged_credential = CredentialItem(
+        credential_name=db_credential.credential_name,
+        credential_info=db_credential.credential_info,
+        credential_values=db_credential.credential_values,
+    )
+
+    encrypted_credential = encrypt_credential_values(
+        updated_patch,
+        new_encryption_key,
+    )
+    if encrypted_credential.credential_name:
+        merged_credential.credential_name = encrypted_credential.credential_name
+
+    if encrypted_credential.credential_values:
+        encrypted_params = {k: v for k, v in encrypted_credential.credential_values.items()}
+
+        merged_credential.credential_values.update(encrypted_params)
+
+    if encrypted_credential.credential_info:
+        if "credential_info" not in merged_credential.credential_info:
+            merged_credential.credential_info = {}
+        merged_credential.credential_info.update(encrypted_credential.credential_info)
+
+    return merged_credential
+
+
 def encrypt_credential_values(
     credential: CredentialItem,
     new_encryption_key: Optional[str] = None,
@@ -120,29 +151,44 @@ class CredentialWriter:
         patch: CredentialItem,
         actor_id: Optional[str],
     ) -> CredentialSaveResult:
-        existing = await self._repository.find_by_name(credential_name)
-        if existing is None:
-            return CredentialNotFound(credential_name=credential_name)
-        typed_existing = _validate_credential(existing)
         typed_patch = _validate_credential(patch)
         new_name = typed_patch.credential_name or credential_name
         encrypted_patch_values = {
             key: self._encrypt_value(value) for key, value in typed_patch.credential_values.items()
         }
-        stored_values = {**typed_existing.credential_values, **encrypted_patch_values}
-        stored_info = {**typed_existing.credential_info, **typed_patch.credential_info}
-        try:
-            await self._repository.update_by_name(
+
+        stored_values: dict[str, str] = {}
+        stored_info: dict[str, object] = {}
+        merge_update = getattr(self._repository, "merge_update_by_name", None)
+        if callable(merge_update) and getattr(self._repository, "supports_json_merge_update", False) is True:
+            updated = await merge_update(
                 credential_name,
-                data={
-                    "credential_name": new_name,
-                    "credential_values": json.dumps(stored_values),
-                    "credential_info": json.dumps(stored_info),
-                    "updated_by": actor_id,
-                },
+                new_name=new_name,
+                credential_values_patch=encrypted_patch_values,
+                credential_info_patch=dict(typed_patch.credential_info),
+                updated_by=actor_id,
             )
-        except UniqueViolationError:
-            return CredentialConflict(credential_name=new_name)
+            if not updated:
+                return CredentialNotFound(credential_name=credential_name)
+        else:
+            existing = await self._repository.find_by_name(credential_name)
+            if existing is None:
+                return CredentialNotFound(credential_name=credential_name)
+            typed_existing = _validate_credential(existing)
+            stored_values = {**typed_existing.credential_values, **encrypted_patch_values}
+            stored_info = {**typed_existing.credential_info, **typed_patch.credential_info}
+            try:
+                await self._repository.update_by_name(
+                    credential_name,
+                    data={
+                        "credential_name": new_name,
+                        "credential_values": json.dumps(stored_values),
+                        "credential_info": json.dumps(stored_info),
+                        "updated_by": actor_id,
+                    },
+                )
+            except UniqueViolationError:
+                return CredentialConflict(credential_name=new_name)
         runtime_existing = self._cache_get(credential_name)
         if runtime_existing is not None:
             typed_runtime_existing = _validate_credential(runtime_existing)

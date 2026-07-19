@@ -329,6 +329,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 )
 from litellm.proxy.container_endpoints.endpoints import router as container_router
 from litellm.proxy.credential_endpoints.endpoints import router as credential_router
+from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
 from litellm.proxy.db.exception_handler import (
     PrismaDBExceptionHandler,
@@ -1077,6 +1078,9 @@ async def proxy_startup_event(app: FastAPI):
         prisma_client=prisma_client,
         snapshot_scheduler=scheduler,
         scheduler_factory=AsyncIOScheduler,
+        pod_lock_manager=(
+            proxy_logging_obj.db_spend_update_writer.pod_lock_manager if proxy_logging_obj is not None else None
+        ),
     )
 
     # Start background health checks AFTER models are loaded and index is built
@@ -7822,6 +7826,7 @@ class ProxyStartupEvent:
         prisma_client: PrismaClient | None,
         snapshot_scheduler: AsyncIOScheduler | None,
         scheduler_factory: Callable[[], AsyncIOScheduler],
+        pod_lock_manager: PodLockManager | None = None,
     ) -> AsyncIOScheduler:
         from litellm.proxy.credential_endpoints.chatgpt_daily_quota_snapshot import (
             schedule_chatgpt_daily_quota_snapshot_job,
@@ -7838,6 +7843,7 @@ class ProxyStartupEvent:
                 if prisma_client is not None
                 else None
             ),
+            pod_lock_manager=pod_lock_manager,
         )
         if not chatgpt_snapshot_scheduler.running:
             chatgpt_snapshot_scheduler.start(paused=False)

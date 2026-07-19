@@ -288,6 +288,19 @@ def test_no_mode_still_injects_max_tokens():
     assert updated["max_tokens"] == 16
 
 
+def test_chatgpt_gpt_image_2_resolves_image_generation_mode():
+    """Regression guard: the chatgpt/gpt-image-2 catalog entry must keep health
+    checks on the image path. When the entry went missing, mode resolution fell
+    back to `chat` and injected max_tokens=16 into an image deployment probe."""
+    from litellm.proxy.health_check import _resolve_health_check_mode
+
+    mode = _resolve_health_check_mode({}, {"model": "chatgpt/gpt-image-2"})
+
+    assert mode == "image_generation"
+    updated = _update_litellm_params_for_health_check({}, {"model": "chatgpt/gpt-image-2"})
+    assert "max_tokens" not in updated
+
+
 # ---------------------------------------------------------------------------
 # Allow-list behavior: only chat-style modes (chat / completion / responses)
 # receive max_tokens. Every other mode is skipped by default.

@@ -1,9 +1,11 @@
 from pathlib import Path
 
 from scripts.sync_codex_models_to_chatgpt import (
+    DEFAULT_PRESERVE_MODELS,
     CodexCatalog,
     CodexModel,
     CodexReasoningLevel,
+    _parse_args,
     parse_model_costs,
     sync_file,
     sync_model_costs,
@@ -282,3 +284,57 @@ def test_sync_file_is_idempotent(tmp_path: Path):
     assert second_result.changed_keys == ()
     assert second_result.removed_keys == ()
     assert path.read_text(encoding="utf-8") == first_sync
+
+
+def test_default_preserve_list_keeps_gpt_image_2():
+    assert "gpt-image-2" in DEFAULT_PRESERVE_MODELS
+    assert "gpt-image-2-2026-04-21" in DEFAULT_PRESERVE_MODELS
+
+
+def test_parse_args_supports_no_default_preserve():
+    args = _parse_args(["--replace", "--no-default-preserve", "--preserve-model", "gpt-5.4"])
+    assert args.no_default_preserve is True
+    assert args.preserve_models == ("gpt-5.4",)
+
+    default_args = _parse_args(["--replace"])
+    assert default_args.no_default_preserve is False
+    assert default_args.preserve_models is None
+
+
+def test_replace_with_default_preserve_keeps_gpt_image_2_entries():
+    model_costs = parse_model_costs(
+        """
+        {
+            "gpt-5.6-sol": {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 0.000005
+            },
+            "chatgpt/gpt-image-2": {
+                "litellm_provider": "chatgpt",
+                "mode": "image_generation",
+                "input_cost_per_image_token": 0.000008
+            },
+            "chatgpt/gpt-image-2-2026-04-21": {
+                "litellm_provider": "chatgpt",
+                "mode": "image_generation",
+                "input_cost_per_image_token": 0.000008
+            },
+            "chatgpt/gpt-5.1-codex-max": {
+                "litellm_provider": "chatgpt",
+                "mode": "responses"
+            }
+        }
+        """
+    )
+
+    result = sync_model_costs(
+        model_costs,
+        _catalog(),
+        replace=True,
+        preserve_models=DEFAULT_PRESERVE_MODELS,
+    )
+
+    assert result.removed_keys == ("chatgpt/gpt-5.1-codex-max",)
+    assert result.model_costs["chatgpt/gpt-image-2"]["mode"] == "image_generation"
+    assert result.model_costs["chatgpt/gpt-image-2-2026-04-21"]["mode"] == "image_generation"

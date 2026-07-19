@@ -23,6 +23,10 @@ DEFAULT_PATHS = (
 DEFAULT_CODEX_PATH = Path("/Applications/ChatGPT.app/Contents/Resources/codex")
 CHATGPT_ENDPOINTS = ("/v1/chat/completions", "/v1/responses")
 PRESERVED_TARGET_FIELDS = frozenset(("provider_specific_entry", "supported_openai_params"))
+# gpt-image-2 is not part of the Codex text-model catalog but is served by the
+# ChatGPT subscription backend; --replace must keep it instead of treating the
+# whole chatgpt/* namespace as catalog-authoritative.
+DEFAULT_PRESERVE_MODELS: tuple[str, ...] = ("gpt-image-2", "gpt-image-2-2026-04-21")
 MODEL_COST_MAP_ADAPTER = TypeAdapter(ModelCostMap)
 logger = logging.getLogger(__name__)
 
@@ -63,6 +67,7 @@ class CliArgs(BaseModel):
     check: bool = False
     replace: bool = False
     preserve_models: Optional[tuple[str, ...]] = None
+    no_default_preserve: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -258,6 +263,11 @@ def _parse_args(argv: Optional[Sequence[str]] = None) -> CliArgs:
         dest="preserve_models",
         help="ChatGPT model to leave unchanged; may be repeated",
     )
+    parser.add_argument(
+        "--no-default-preserve",
+        action="store_true",
+        help="Do not preserve the built-in models (gpt-image-2); only --preserve-model entries are kept",
+    )
     return CliArgs.model_validate(vars(parser.parse_args(argv)))
 
 
@@ -267,6 +277,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         catalog = load_codex_catalog(_resolve_codex_binary(args.codex_bin), bundled=args.bundled)
         paths = tuple(args.paths) or DEFAULT_PATHS
+        preserve_models = (
+            tuple(args.preserve_models or ())
+            if args.no_default_preserve
+            else (*DEFAULT_PRESERVE_MODELS, *tuple(args.preserve_models or ()))
+        )
         results = tuple(
             (
                 path,
@@ -275,7 +290,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     catalog=catalog,
                     check=args.check,
                     replace=args.replace,
-                    preserve_models=args.preserve_models or (),
+                    preserve_models=preserve_models,
                 ),
             )
             for path in paths

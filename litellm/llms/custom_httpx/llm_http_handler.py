@@ -263,12 +263,18 @@ class _ProviderRequestDiagnosticsGuard:
 
 class BaseLLMHTTPHandler:
     @staticmethod
+    def _provider_request_diagnostics_enabled() -> bool:
+        return os.getenv("LITELLM_PROVIDER_REQUEST_DIAGNOSTICS", "").lower() in ("1", "true", "yes")
+
+    @staticmethod
     def _record_provider_request_diagnostics(
         responses_api_provider_config: BaseResponsesAPIConfig,
         headers: Mapping[object, object],
         request_data: Mapping[object, object],
         logging_obj: LiteLLMLoggingObj,
     ) -> None:
+        if not BaseLLMHTTPHandler._provider_request_diagnostics_enabled():
+            return
         with _ProviderRequestDiagnosticsGuard():
             request_diagnostics = responses_api_provider_config.get_provider_request_diagnostics(
                 headers=headers,

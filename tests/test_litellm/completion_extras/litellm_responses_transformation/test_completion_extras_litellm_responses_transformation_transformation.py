@@ -304,6 +304,31 @@ def test_chunk_parser_enum_output_text_delta_produces_text():
     assert choice.finish_reason is None
 
 
+def test_chunk_parser_response_incomplete_finishes_with_length():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator = OpenAiResponsesToChatCompletionStreamIterator(
+        streaming_response=None, sync_stream=True
+    )
+
+    chunk = {
+        "type": "response.incomplete",
+        "response": {
+            "id": "resp_partial",
+            "status": "incomplete",
+            "output": [],
+            "incomplete_details": {"reason": "max_output_tokens"},
+        },
+    }
+
+    result = iterator.chunk_parser(chunk)
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "length"
+
+
 def test_chunk_parser_function_call_added_produces_tool_use():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
@@ -785,6 +810,85 @@ def test_transform_response_recovers_output_item_done_from_raw_sse():
 
     assert len(result.choices) == 1
     assert result.choices[0].message.content == "Recovered from output item"
+
+
+def test_transform_response_recovers_incomplete_sse_with_length_finish_reason():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_partial","text":"partial answer"}',
+            'data: {"type":"response.incomplete","response":{"id":"resp_partial","object":"response","created_at":1760144904,"status":"incomplete","model":"gpt-5.4","output":[],"incomplete_details":{"reason":"max_output_tokens"}}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    raw_response.status = "incomplete"
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "partial answer"
+    assert result.choices[0].finish_reason == "length"
+
+
+def test_transform_response_recovers_reasoning_from_raw_sse():
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+
+    raw_sse = "\n".join(
+        [
+            'data: {"type":"response.output_item.done","output_index":0,"item":{"type":"reasoning","id":"rs_1","status":"completed","summary":[],"content":[{"type":"output_text","text":"thinking hard"}]}}',
+            'data: {"type":"response.output_item.done","output_index":1,"item":{"type":"message","id":"msg_1","role":"assistant","status":"completed","content":[{"type":"output_text","text":"final answer","annotations":[]}]}}',
+            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[]}}',
+            "data: [DONE]",
+            "",
+        ]
+    )
+
+    raw_response = _make_empty_responses_api_response()
+    model_response = _make_empty_model_response()
+    logging_obj = Mock()
+    logging_obj.model_call_details = {"original_response": raw_sse}
+
+    result = handler.transform_response(
+        model="gpt-5.4",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=logging_obj,
+        request_data={"model": "gpt-5.4"},
+        messages=[{"role": "user", "content": "Reply"}],
+        optional_params={},
+        litellm_params={},
+        encoding=Mock(),
+    )
+
+    assert len(result.choices) == 1
+    assert result.choices[0].message.content == "final answer"
+    assert result.choices[0].message.reasoning_content == "thinking hard"
+    assert result.choices[0].finish_reason == "stop"
 
 
 def test_transform_response_recovers_output_item_done_from_whitespace_padded_raw_sse():
