@@ -1,3 +1,4 @@
+from typing import cast
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,13 +8,16 @@ import litellm
 from litellm import ModelResponse
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import (
+    create_claude_desktop_model_list_response,
     create_model_info_response,
     get_available_models_for_user,
+    is_claude_desktop_user_agent,
     is_known_model,
     is_known_vector_store_index,
     model_dump_with_preserved_fields,
     validate_model_access,
 )
+from litellm.types.proxy.model_listing import ModelInfoResponse
 
 
 def normalize(value):
@@ -103,16 +107,16 @@ def test_is_known_vector_store_index_error_path_no_registry(monkeypatch):
 
 def test_create_model_info_response_happy_path_no_metadata():
     result = create_model_info_response(model_id="gpt-4o", provider="openai")
+    max_input_tokens = result.get("max_input_tokens")
+    max_output_tokens = result.get("max_output_tokens")
     snapshot = {
         "id": result["id"],
         "object": result["object"],
         "owned_by": result["owned_by"],
         "created_is_int": isinstance(result["created"], int),
         "metadata_absent": "metadata" not in result,
-        "max_input_tokens_positive_int": isinstance(result["max_input_tokens"], int)
-        and result["max_input_tokens"] > 0,
-        "max_output_tokens_positive_int": isinstance(result["max_output_tokens"], int)
-        and result["max_output_tokens"] > 0,
+        "max_input_tokens_positive_int": max_input_tokens is not None and max_input_tokens > 0,
+        "max_output_tokens_positive_int": max_output_tokens is not None and max_output_tokens > 0,
     }
     assert snapshot == {
         "id": "gpt-4o",
@@ -189,6 +193,103 @@ def test_create_model_info_response_invalid_fallback_type_raises():
     assert "Invalid fallback_type" in str(exc_info.value.detail)
 
 
+@pytest.mark.parametrize(
+    ("user_agent", "expected"),
+    [
+        (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Claude/1.22209.3 Chrome/148.0.7778.271 Electron/42.5.1 Safari/537.36",
+            True,
+        ),
+        ("Claude/2", True),
+        ("product/1 Claude/2.3.4 other/5", True),
+        ("Claude-Code/2.3.4", False),
+        ("claude-cli/2.3.4", False),
+        ("NotClaude/2.3.4", False),
+        ("Mozilla/5.0", False),
+        (None, False),
+    ],
+)
+def test_is_claude_desktop_user_agent(user_agent: str | None, expected: bool):
+    assert is_claude_desktop_user_agent(user_agent) is expected
+
+
+def test_create_claude_desktop_model_list_response_supports_1m_and_pagination():
+    model_data = cast(
+        list[ModelInfoResponse],
+        [
+            {
+                "id": "exact-1m",
+                "object": "model",
+                "created": 1677629802,
+                "owned_by": "openai",
+                "max_input_tokens": 1_000_000,
+            },
+            {
+                "id": "above-1m",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 2_000_000,
+            },
+            {
+                "id": "below-1m",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": 999_999,
+            },
+            {
+                "id": "missing-limit",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+            },
+            {
+                "id": "null-limit",
+                "object": "model",
+                "created": 0,
+                "owned_by": "openai",
+                "max_input_tokens": None,
+            },
+        ],
+    )
+
+    response = create_claude_desktop_model_list_response(model_data)
+
+    assert response == {
+        "data": [
+            {
+                "id": "exact-1m",
+                "type": "model",
+                "created_at": "2023-03-01T00:16:42Z",
+                "supports1m": True,
+            },
+            {
+                "id": "above-1m",
+                "type": "model",
+                "created_at": "1970-01-01T00:00:00Z",
+                "supports1m": True,
+            },
+            {"id": "below-1m", "type": "model", "created_at": "1970-01-01T00:00:00Z"},
+            {"id": "missing-limit", "type": "model", "created_at": "1970-01-01T00:00:00Z"},
+            {"id": "null-limit", "type": "model", "created_at": "1970-01-01T00:00:00Z"},
+        ],
+        "has_more": False,
+        "first_id": "exact-1m",
+        "last_id": "null-limit",
+    }
+
+
+def test_create_claude_desktop_model_list_response_empty():
+    assert create_claude_desktop_model_list_response([]) == {
+        "data": [],
+        "has_more": False,
+        "first_id": None,
+        "last_id": None,
+    }
+
+
 def test_validate_model_access_happy_path_single_model_in_list():
     summary = {
         "result": validate_model_access("gpt-4o", ["gpt-4o", "claude-haiku"]),
@@ -204,9 +305,7 @@ def test_validate_model_access_happy_path_single_model_in_list():
 
 def test_validate_model_access_happy_path_batch_all_accessible():
     summary = {
-        "result": validate_model_access(
-            "gpt-4o,claude-haiku", ["gpt-4o", "claude-haiku", "gemini"]
-        ),
+        "result": validate_model_access("gpt-4o,claude-haiku", ["gpt-4o", "claude-haiku", "gemini"]),
         "input": "gpt-4o,claude-haiku",
         "available": ["gpt-4o", "claude-haiku", "gemini"],
     }
@@ -388,9 +487,7 @@ async def test_get_available_models_for_user_error_path_complete_list_raises(
     def _boom(**_kwargs):
         raise RuntimeError("downstream failure")
 
-    monkeypatch.setattr(
-        "litellm.proxy.auth.model_checks.get_complete_model_list", _boom
-    )
+    monkeypatch.setattr("litellm.proxy.auth.model_checks.get_complete_model_list", _boom)
     user_api_key_dict = UserAPIKeyAuth(
         api_key="sk-test-key",
         user_id="user-1",

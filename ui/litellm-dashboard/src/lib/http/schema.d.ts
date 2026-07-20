@@ -22507,6 +22507,37 @@ export interface components {
             /** Enabled */
             enabled: boolean;
         };
+        /** ClaudeDesktopModelInfo */
+        ClaudeDesktopModelInfo: {
+            /** Created At */
+            created_at: string;
+            /** Id */
+            id: string;
+            /**
+             * Supports1M
+             * @constant
+             */
+            supports1m?: true;
+            /**
+             * Type
+             * @constant
+             */
+            type: "model";
+        };
+        /** ClaudeDesktopModelListResponse */
+        ClaudeDesktopModelListResponse: {
+            /** Data */
+            data: components["schemas"]["ClaudeDesktopModelInfo"][];
+            /** First Id */
+            first_id: string | null;
+            /**
+             * Has More
+             * @constant
+             */
+            has_more: false;
+            /** Last Id */
+            last_id: string | null;
+        };
         /**
          * CloudZeroExportRequest
          * @description Request model for CloudZero export operations
@@ -28108,6 +28139,44 @@ export interface components {
         ModelInfoDelete: {
             /** Id */
             id: string;
+        };
+        /** ModelInfoMetadata */
+        ModelInfoMetadata: {
+            /** Fallbacks */
+            fallbacks: string[];
+        };
+        /**
+         * ModelInfoResponse
+         * @description OpenAI-compatible model object. `metadata` is present only when the
+         *     endpoint is called with include_metadata=true.
+         */
+        ModelInfoResponse: {
+            /** Created */
+            created: number;
+            /** Id */
+            id: string;
+            /** Max Input Tokens */
+            max_input_tokens?: number;
+            /** Max Output Tokens */
+            max_output_tokens?: number;
+            metadata?: components["schemas"]["ModelInfoMetadata"];
+            /**
+             * Object
+             * @constant
+             */
+            object: "model";
+            /** Owned By */
+            owned_by: string;
+        };
+        /** ModelListResponse */
+        ModelListResponse: {
+            /** Data */
+            data: components["schemas"]["ModelInfoResponse"][];
+            /**
+             * Object
+             * @constant
+             */
+            object: "list";
         };
         /** ModelParams */
         ModelParams: {
@@ -44755,7 +44824,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ModelListResponse"];
                 };
             };
             /** @description Validation Error */
@@ -55966,7 +56035,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ModelListResponse"] | components["schemas"]["ClaudeDesktopModelListResponse"];
                 };
             };
             /** @description Validation Error */

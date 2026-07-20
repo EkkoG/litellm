@@ -9,19 +9,39 @@ Pins (PR2):
 
 from __future__ import annotations
 
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
+from typing import Protocol
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.proxy import proxy_server
+from litellm.types.proxy.model_listing import (
+    ClaudeDesktopModelListResponse,
+    ModelInfoResponse,
+    ModelListResponse,
+)
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
 
-def _stub_model_info_response(
-    model_id: str = "gpt-4", provider: str = "openai"
-) -> dict:
+CLAUDE_DESKTOP_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Claude/1.22209.3 Chrome/148.0.7778.271 Electron/42.5.1 Safari/537.36"
+)
+CLAUDE_DESKTOP_MODEL_LIST_ADAPTER = TypeAdapter(ClaudeDesktopModelListResponse)
+MODEL_LIST_ADAPTER = TypeAdapter(ModelListResponse)
+
+
+class HTTPTestClient(Protocol):
+    def get(self, url: str, *, headers: Mapping[str, str] | None = None) -> httpx.Response: ...
+
+
+def _stub_model_info_response(model_id: str = "gpt-4", provider: str = "openai") -> ModelInfoResponse:
     return {
         "id": model_id,
         "object": "model",
@@ -59,9 +79,7 @@ def patched_models(monkeypatch):
     def _fake_create_model_info_response(model_id, provider="openai", **kwargs):
         return _stub_model_info_response(model_id=model_id, provider=provider)
 
-    monkeypatch.setattr(
-        proxy_utils, "create_model_info_response", _fake_create_model_info_response
-    )
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
 
     monkeypatch.setattr(proxy_utils, "validate_model_access", lambda **kwargs: None)
 
@@ -97,6 +115,76 @@ def test_get_models_happy_path(client, auth_as, patched_models, path):
         ],
         "object": "list",
     }
+
+
+def test_v1_models_returns_claude_desktop_shape_after_filtering(
+    client: HTTPTestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    patched_models: MagicMock,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    from litellm.proxy import utils as proxy_utils
+
+    monkeypatch.setattr(patched_models, "get_fully_blocked_model_names", MagicMock(return_value={"gpt-4"}))
+
+    def _fake_create_model_info_response(
+        model_id: str, provider: str = "openai", **kwargs: object
+    ) -> ModelInfoResponse:
+        return {
+            **_stub_model_info_response(model_id=model_id, provider=provider),
+            "max_input_tokens": 1_000_000 if model_id == "claude-sonnet" else 999_999,
+        }
+
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _fake_create_model_info_response)
+
+    with auth_as():
+        response = client.get("/v1/models", headers={"User-Agent": CLAUDE_DESKTOP_USER_AGENT})
+
+    assert response.status_code == 200
+    assert CLAUDE_DESKTOP_MODEL_LIST_ADAPTER.validate_json(response.content) == {
+        "data": [
+            {
+                "id": "claude-sonnet",
+                "type": "model",
+                "created_at": "1970-01-01T00:00:00Z",
+                "supports1m": True,
+            }
+        ],
+        "has_more": False,
+        "first_id": "claude-sonnet",
+        "last_id": "claude-sonnet",
+    }
+    assert "user-agent" in {value.strip().lower() for value in response.headers["vary"].split(",")}
+
+
+def test_models_route_ignores_claude_desktop_user_agent(
+    client: HTTPTestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    patched_models: MagicMock,
+):
+    with auth_as():
+        response = client.get("/models", headers={"User-Agent": CLAUDE_DESKTOP_USER_AGENT})
+
+    assert response.status_code == 200
+    response_body = MODEL_LIST_ADAPTER.validate_json(response.content)
+    assert response_body["object"] == "list"
+    assert all(model["object"] == "model" for model in response_body["data"])
+    assert "has_more" not in response_body
+
+
+def test_v1_models_normal_user_agent_keeps_openai_shape_and_varies_by_user_agent(
+    client: HTTPTestClient,
+    auth_as: Callable[..., AbstractContextManager[object]],
+    patched_models: MagicMock,
+):
+    with auth_as():
+        response = client.get("/v1/models", headers={"User-Agent": "OpenAI/Python 2.17.0"})
+
+    assert response.status_code == 200
+    response_body = MODEL_LIST_ADAPTER.validate_json(response.content)
+    assert response_body["object"] == "list"
+    assert "has_more" not in response_body
+    assert "user-agent" in {value.strip().lower() for value in response.headers["vary"].split(",")}
 
 
 @pytest.mark.parametrize("path", ["/v1/models", "/models"])

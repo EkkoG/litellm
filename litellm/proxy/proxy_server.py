@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from typing import (
     TYPE_CHECKING,
+    Annotated,
     Any,
     AsyncGenerator,
     Callable,
@@ -118,6 +119,11 @@ from litellm.proxy.common_utils.realtime_utils import _realtime_request_body
 from litellm.router_utils.add_retry_fallback_headers import (
     get_fallback_errors_from_headers,
     get_hidden_params_dict,
+)
+from litellm.types.proxy.model_listing import (
+    ClaudeDesktopModelListResponse,
+    ModelInfoResponse,
+    ModelListResponse,
 )
 from litellm.types.utils import (
     ModelResponse,
@@ -8594,7 +8600,6 @@ class ProxyStartupEvent:
 
 
 #### API ENDPOINTS ####
-@router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
 )  # if project requires model list
@@ -8608,7 +8613,7 @@ async def model_list(
     fallback_type: Optional[str] = None,
     scope: Optional[str] = None,
     healthy_only: Optional[bool] = False,
-):
+) -> ModelListResponse:
     """
     Use `/model/info` - to get detailed model information, example - pricing, mode, etc.
 
@@ -8661,7 +8666,7 @@ async def model_list(
         )
 
     # Compute once — used in both branches below to hide paused models from the listing.
-    blocked_names = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
+    blocked_names: Set[str] = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
 
     # Opt-in: also hide models whose deployments are all unhealthy per background
     # health checks. Empty when health state is unavailable or stale (fail open).
@@ -8674,7 +8679,7 @@ async def model_list(
                 "(requires background_health_checks); returning unfiltered model list"
             )
 
-    hidden_names = blocked_names | unhealthy_names
+    hidden_names: Set[str] = blocked_names | unhealthy_names
 
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
@@ -8713,7 +8718,7 @@ async def model_list(
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
-        model_data = []
+        model_data: list[ModelInfoResponse] = []
         for response_id, lookup_id in TeamModelNameTranslator.listing_entries(all_models, llm_router, settings):
             model_info = create_model_info_response(
                 model_id=lookup_id,
@@ -8725,10 +8730,7 @@ async def model_list(
             model_info["id"] = response_id
             model_data.append(model_info)
 
-        return dict(
-            data=model_data,
-            object="list",
-        )
+        return ModelListResponse(data=model_data, object="list")
 
     # Otherwise, use the normal behavior (current implementation)
     # Get available models for the user
@@ -8765,10 +8767,53 @@ async def model_list(
         model_info["id"] = response_id
         model_data.append(model_info)
 
-    return dict(
-        data=model_data,
-        object="list",
+    return ModelListResponse(data=model_data, object="list")
+
+
+@router.get(
+    "/v1/models",
+    dependencies=[Depends(user_api_key_auth)],
+    tags=["model management"],
+    name="model_list",
+    description=model_list.__doc__,
+)
+async def model_list_v1(
+    request: Request,
+    fastapi_response: Response,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    return_wildcard_routes: bool | None = False,
+    team_id: str | None = None,
+    include_model_access_groups: bool | None = False,
+    only_model_access_groups: bool | None = False,
+    include_metadata: bool | None = False,
+    fallback_type: str | None = None,
+    scope: str | None = None,
+    healthy_only: bool | None = False,
+) -> ModelListResponse | ClaudeDesktopModelListResponse:
+    from litellm.proxy.utils import (
+        create_claude_desktop_model_list_response,
+        is_claude_desktop_user_agent,
     )
+
+    vary_header = fastapi_response.headers.get("Vary")
+    vary_values = tuple(value.strip() for value in vary_header.split(",")) if vary_header else ()
+    if "*" not in vary_values and not any(value.lower() == "user-agent" for value in vary_values):
+        fastapi_response.headers["Vary"] = ", ".join((*vary_values, "User-Agent"))
+
+    response = await model_list(
+        user_api_key_dict=user_api_key_dict,
+        return_wildcard_routes=return_wildcard_routes,
+        team_id=team_id,
+        include_model_access_groups=include_model_access_groups,
+        only_model_access_groups=only_model_access_groups,
+        include_metadata=include_metadata,
+        fallback_type=fallback_type,
+        scope=scope,
+        healthy_only=healthy_only,
+    )
+    if is_claude_desktop_user_agent(request.headers.get("user-agent")):
+        return create_claude_desktop_model_list_response(response["data"])
+    return response
 
 
 @router.get(

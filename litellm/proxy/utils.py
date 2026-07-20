@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import json
 import os
+import re
 import smtplib
 import ssl
 import sys
@@ -49,7 +50,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.proxy.model_listing import ModelInfoResponse
+from litellm.types.proxy.model_listing import (
+    ClaudeDesktopModelInfo,
+    ClaudeDesktopModelListResponse,
+    ModelInfoResponse,
+)
 from litellm.types.utils import CallTypes, CallTypesLiteral, ModelInfo
 
 try:
@@ -6165,6 +6170,38 @@ def create_model_info_response(
         fallback_type=effective_fallback_type,
     )
     return {**base, "metadata": {"fallbacks": fallbacks}}
+
+
+_CLAUDE_DESKTOP_USER_AGENT_PATTERN = re.compile(r"(?:^|\s)Claude/\d+(?:\.\d+)*(?:\s|$)")
+
+
+def is_claude_desktop_user_agent(user_agent: str | None) -> bool:
+    return user_agent is not None and _CLAUDE_DESKTOP_USER_AGENT_PATTERN.search(user_agent) is not None
+
+
+def _create_claude_desktop_model_info(model: ModelInfoResponse) -> ClaudeDesktopModelInfo:
+    created_at = datetime.fromtimestamp(model["created"], tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    max_input_tokens = model.get("max_input_tokens")
+    if max_input_tokens is not None and max_input_tokens >= 1_000_000:
+        return {
+            "id": model["id"],
+            "type": "model",
+            "created_at": created_at,
+            "supports1m": True,
+        }
+    return {"id": model["id"], "type": "model", "created_at": created_at}
+
+
+def create_claude_desktop_model_list_response(
+    model_data: Sequence[ModelInfoResponse],
+) -> ClaudeDesktopModelListResponse:
+    data = [_create_claude_desktop_model_info(model) for model in model_data]
+    return {
+        "data": data,
+        "has_more": False,
+        "first_id": data[0]["id"] if data else None,
+        "last_id": data[-1]["id"] if data else None,
+    }
 
 
 def validate_model_access(

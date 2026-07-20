@@ -19,3 +19,24 @@ class ModelInfoResponse(TypedDict):
     created: int
     owned_by: str
     metadata: NotRequired[ModelInfoMetadata]
+    max_input_tokens: NotRequired[int]
+    max_output_tokens: NotRequired[int]
+
+
+class ModelListResponse(TypedDict):
+    data: list[ModelInfoResponse]
+    object: Literal["list"]
+
+
+class ClaudeDesktopModelInfo(TypedDict):
+    id: str
+    type: Literal["model"]
+    created_at: str
+    supports1m: NotRequired[Literal[True]]
+
+
+class ClaudeDesktopModelListResponse(TypedDict):
+    data: list[ClaudeDesktopModelInfo]
+    has_more: Literal[False]
+    first_id: str | None
+    last_id: str | None
