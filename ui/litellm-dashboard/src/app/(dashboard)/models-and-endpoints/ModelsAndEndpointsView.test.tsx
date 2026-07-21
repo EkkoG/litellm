@@ -236,6 +236,19 @@ describe("ModelsAndEndpointsView", () => {
     expect(healthCheckProps.all_models_on_proxy).not.toContain("gpt-4");
   });
 
+  it("does not expose the shared credentials tab to org_admin", async () => {
+    mockUseAuthorized.mockReturnValue({ ...AUTHORIZED_ADMIN, userRole: "org_admin" });
+    const queryClient = createQueryClient();
+    const { findByText, queryByRole } = render(
+      <QueryClientProvider client={queryClient}>
+        <ModelsAndEndpointsView premiumUser={false} teams={[]} />
+      </QueryClientProvider>,
+    );
+
+    await findByText("Model Management", {}, { timeout: 10000 });
+    expect(queryByRole("tab", { name: "LLM Credentials" })).not.toBeInTheDocument();
+  });
+
   it("should show the credential status column in the LLM Credentials tab", async () => {
     const queryClient = createQueryClient();
     const { getAllByRole, getByRole, findByText } = render(

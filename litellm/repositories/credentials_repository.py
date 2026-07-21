@@ -58,10 +58,10 @@ class CredentialsRepository:
         return self._to_model(record)
 
     @staticmethod
-    def advisory_lock_key(credential_name: str) -> int:
+    def advisory_lock_key(credential_name: str, provider: str = "managed-oauth") -> int:
         return int.from_bytes(
             hashlib.blake2b(
-                f"litellm:chatgpt-credential:{credential_name}".encode(),
+                f"litellm:oauth-credential:{provider}:{credential_name}".encode(),
                 digest_size=8,
             ).digest(),
             "big",

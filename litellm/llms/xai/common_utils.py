@@ -58,9 +58,6 @@ class XAIModelInfo(BaseLLMModelInfo):
         the legacy order with legacy_generic_before_env=True. In both modes,
         the provider-specific litellm.xai_key takes precedence over fallbacks.
         """
-        if legacy_generic_before_env:
-            return api_key or litellm.xai_key or litellm.api_key or get_secret_str("XAI_API_KEY")
-
         return api_key or litellm.xai_key or get_secret_str("XAI_API_KEY")
 
     @staticmethod

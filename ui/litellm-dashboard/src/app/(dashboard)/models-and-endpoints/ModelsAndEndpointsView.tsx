@@ -337,6 +337,7 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
               // falsy children inconsistently, which previously caused
               // "click LLM Credentials, see nothing" for Admin Viewer.
               const isAdmin = all_admin_roles.includes(userRole);
+              const canViewSharedCredentials = userRole !== "org_admin";
               const visibleTabs: Array<{ tab: React.ReactElement; panel: React.ReactElement }> = [
                 {
                   tab: <Tab key="all-models">{isAdmin ? "All Models" : "Your Models"}</Tab>,
@@ -379,15 +380,17 @@ const ModelsAndEndpointsView: React.FC<ModelDashboardProps> = ({ premiumUser, te
                 });
               }
               if (isAdmin) {
-                visibleTabs.push(
-                  {
+                if (canViewSharedCredentials) {
+                  visibleTabs.push({
                     tab: <Tab key="llm-credentials">LLM Credentials</Tab>,
                     panel: (
                       <TabPanel key="llm-credentials">
                         <CredentialsPanel uploadProps={uploadProps} />
                       </TabPanel>
                     ),
-                  },
+                  });
+                }
+                visibleTabs.push(
                   {
                     tab: <Tab key="pass-through">Pass-Through Endpoints</Tab>,
                     panel: (

@@ -223,7 +223,7 @@ class XAIResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not api_key:
             raise ValueError(
                 "XAI API key is required. Set api_key, litellm.xai_key, "
-                "litellm.api_key, XAI_API_KEY, or use_xai_oauth=True."
+                "XAI_API_KEY, a managed credential, or use_xai_oauth=True."
             )
 
         headers.update(

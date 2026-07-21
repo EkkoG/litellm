@@ -1,10 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Providers } from "../provider_info_helpers";
 import { CredentialItem } from "../networking";
 import CredentialModal from "./CredentialModal";
+
+const { mockXAIOAuthCredentialImportCall } = vi.hoisted(() => ({
+  mockXAIOAuthCredentialImportCall: vi.fn(),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
   default: () => ({ accessToken: "test-token" }),
@@ -14,6 +18,7 @@ vi.mock("../networking", async () => {
   const actual = await vi.importActual("../networking");
   return {
     ...actual,
+    xaiOAuthCredentialImportCall: mockXAIOAuthCredentialImportCall,
     getProviderCreateMetadata: vi.fn().mockResolvedValue([
       {
         provider: "OpenAI",
@@ -44,6 +49,19 @@ vi.mock("../networking", async () => {
           {
             key: "api_key",
             label: "Anthropic API Key",
+            field_type: "password",
+            required: true,
+          },
+        ],
+      },
+      {
+        provider: "xAI",
+        provider_display_name: Providers.xAI,
+        litellm_provider: "xai",
+        credential_fields: [
+          {
+            key: "api_key",
+            label: "xAI API Key",
             field_type: "password",
             required: true,
           },
@@ -104,6 +122,12 @@ const mockGoogleCredential: CredentialItem = {
   credential_info: { custom_llm_provider: "gemini" },
 };
 
+const mockXAIOAuthCredential: CredentialItem = {
+  credential_name: "xai-oauth",
+  credential_values: { access_token: "****abcd" },
+  credential_info: { custom_llm_provider: "xai", auth_type: "oauth_json_import" },
+};
+
 const renderModal = (props: Partial<React.ComponentProps<typeof CredentialModal>> = {}) =>
   render(
     <QueryClientProvider client={createQueryClient()}>
@@ -119,6 +143,11 @@ const renderModal = (props: Partial<React.ComponentProps<typeof CredentialModal>
   );
 
 describe("CredentialModal", () => {
+  beforeEach(() => {
+    mockXAIOAuthCredentialImportCall.mockReset();
+    mockXAIOAuthCredentialImportCall.mockResolvedValue({ success: true });
+  });
+
   describe("add mode", () => {
     it("renders the add title and an editable credential name", () => {
       renderModal({ mode: "add" });
@@ -168,6 +197,69 @@ describe("CredentialModal", () => {
         expect(screen.getByRole("button", { name: "Sign in with GitHub" })).toBeInTheDocument();
         expect(screen.queryByRole("button", { name: "Add Credential" })).not.toBeInTheDocument();
       });
+    });
+
+    it("defaults xAI to API key authentication", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderModal({ mode: "add" });
+
+      const providerSelect = screen.getByLabelText("Provider:");
+      await user.click(providerSelect);
+      await user.type(providerSelect, "xAI");
+      await user.click(await screen.findByText("xAI", { selector: "span" }));
+
+      expect(screen.getByRole("radio", { name: "API key" })).toBeChecked();
+      expect(screen.getByRole("radio", { name: "OAuth JSON" })).not.toBeChecked();
+      expect(await screen.findByLabelText("xAI API Key")).toBeInTheDocument();
+      expect(screen.queryByPlaceholderText("Paste xAI OAuth JSON")).not.toBeInTheDocument();
+    });
+
+    it("imports pasted xAI OAuth JSON without previewing it by default", async () => {
+      const onCredentialComplete = vi.fn();
+      const user = userEvent.setup({ delay: null });
+      renderModal({ mode: "add", onCredentialComplete });
+
+      await user.type(screen.getByLabelText("Credential Name:"), "xai-oauth");
+      const providerSelect = screen.getByLabelText("Provider:");
+      await user.click(providerSelect);
+      await user.type(providerSelect, "xAI");
+      await user.click(await screen.findByText("xAI", { selector: "span" }));
+      await user.click(screen.getByRole("radio", { name: "OAuth JSON" }));
+
+      const oauthJSONInput = screen.getByPlaceholderText("Paste xAI OAuth JSON");
+      expect(oauthJSONInput).toHaveAttribute("type", "password");
+      fireEvent.change(oauthJSONInput, { target: { value: '{"access_token":"secret"}' } });
+      await user.click(screen.getByRole("button", { name: "Import OAuth JSON" }));
+
+      await waitFor(() => {
+        expect(mockXAIOAuthCredentialImportCall).toHaveBeenCalledWith("test-token", {
+          credential_name: "xai-oauth",
+          auth_json: '{"access_token":"secret"}',
+          overwrite_existing: false,
+        });
+      });
+      expect(onCredentialComplete).toHaveBeenCalledOnce();
+      expect(screen.queryByPlaceholderText("Paste xAI OAuth JSON")).not.toBeInTheDocument();
+    });
+
+    it("rejects pasted xAI OAuth JSON over 64 KiB", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderModal({ mode: "add" });
+
+      const providerSelect = screen.getByLabelText("Provider:");
+      await user.click(providerSelect);
+      await user.type(providerSelect, "xAI");
+      await user.click(await screen.findByText("xAI", { selector: "span" }));
+      await user.click(screen.getByRole("radio", { name: "OAuth JSON" }));
+
+      await user.click(screen.getByRole("button", { name: "Show OAuth JSON" }));
+      fireEvent.change(screen.getByPlaceholderText("Paste xAI OAuth JSON"), {
+        target: { value: "x".repeat(64 * 1024 + 1) },
+      });
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("OAuth JSON must be 64 KiB or smaller");
+      expect(screen.getByPlaceholderText("Paste xAI OAuth JSON")).toHaveValue("");
+      expect(screen.getByRole("button", { name: "Import OAuth JSON" })).toBeDisabled();
     });
   });
 
@@ -224,6 +316,40 @@ describe("CredentialModal", () => {
       await waitFor(() => {
         expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ custom_llm_provider: "gemini" }));
       });
+    });
+
+    it("replaces an existing xAI OAuth credential without exposing stored tokens", async () => {
+      const user = userEvent.setup({ delay: null });
+      renderModal({ mode: "edit", existingCredential: mockXAIOAuthCredential });
+
+      expect(screen.getByRole("radio", { name: "OAuth JSON" })).toBeChecked();
+      expect(screen.queryByDisplayValue("****abcd")).not.toBeInTheDocument();
+      fireEvent.change(screen.getByPlaceholderText("Paste xAI OAuth JSON"), {
+        target: { value: '{"access_token":"replacement"}' },
+      });
+      await user.click(screen.getByRole("button", { name: "Replace OAuth JSON" }));
+
+      await waitFor(() => {
+        expect(mockXAIOAuthCredentialImportCall).toHaveBeenCalledWith("test-token", {
+          credential_name: "xai-oauth",
+          auth_json: '{"access_token":"replacement"}',
+          overwrite_existing: true,
+        });
+      });
+    });
+
+    it("clears xAI OAuth JSON after an import error", async () => {
+      mockXAIOAuthCredentialImportCall.mockRejectedValue(new Error("Invalid xAI OAuth credential JSON"));
+      const user = userEvent.setup({ delay: null });
+      renderModal({ mode: "edit", existingCredential: mockXAIOAuthCredential });
+
+      fireEvent.change(screen.getByPlaceholderText("Paste xAI OAuth JSON"), {
+        target: { value: '{"access_token":"invalid"}' },
+      });
+      await user.click(screen.getByRole("button", { name: "Replace OAuth JSON" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent("Invalid xAI OAuth credential JSON");
+      expect(screen.getByPlaceholderText("Paste xAI OAuth JSON")).toHaveValue("");
     });
   });
 });

@@ -321,6 +321,23 @@ class BaseLLMHTTPHandler:
                 metadata=updated_metadata
             )
 
+    @staticmethod
+    def _managed_xai_oauth_context(litellm_params: dict) -> tuple[str, str] | None:
+        credential_name = litellm_params.get("managed_credential_name")
+        if (
+            litellm_params.get("managed_credential_provider") != "xai"
+            or litellm_params.get("managed_credential_auth_type") != "oauth_json_import"
+            or not isinstance(credential_name, str)
+        ):
+            return None
+        return credential_name, str(litellm_params.get("api_key") or "")
+
+    @staticmethod
+    def _replace_bearer_token(headers: dict, token: object) -> dict:
+        if not isinstance(token, str) or not token:
+            return headers
+        return {**headers, "Authorization": f"Bearer {token}"}
+
     async def _make_common_async_call(
         self,
         async_httpx_client: AsyncHTTPHandler,
@@ -338,7 +355,10 @@ class BaseLLMHTTPHandler:
         max_retry_on_unprocessable_entity_error = provider_config.max_retry_on_unprocessable_entity_error
 
         response: Optional[httpx.Response] = None
-        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+        managed_context = self._managed_xai_oauth_context(litellm_params)
+        auth_retried = False
+        max_attempts = max(max_retry_on_unprocessable_entity_error, 1) + (1 if managed_context is not None else 0)
+        for i in range(max_attempts):
             try:
                 response = await async_httpx_client.post(
                     url=api_base,
@@ -349,15 +369,26 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                 )
             except httpx.HTTPStatusError as e:
-                hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
+                if e.response.status_code == 401 and managed_context is not None and not auth_retried:
+                    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+                    credential_name, rejected_token = managed_context
+                    refreshed = await CredentialAccessor.async_force_refresh_after_unauthorized(
+                        credential_name,
+                        rejected_token,
+                    )
+                    if refreshed is not None:
+                        headers = self._replace_bearer_token(headers, refreshed.get("api_key"))
+                        auth_retried = True
+                        continue
+                hit_max_retry = i + 1 >= max_retry_on_unprocessable_entity_error
                 should_retry = provider_config.should_retry_llm_api_inside_llm_translation_on_http_error(
                     e=e, litellm_params=litellm_params
                 )
                 if should_retry and not hit_max_retry:
                     data = provider_config.transform_request_on_unprocessable_entity_error(e=e, request_data=data)
                     continue
-                else:
-                    raise self._handle_error(e=e, provider_config=provider_config)
+                raise self._handle_error(e=e, provider_config=provider_config)
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
             break
@@ -387,8 +418,11 @@ class BaseLLMHTTPHandler:
         max_retry_on_unprocessable_entity_error = provider_config.max_retry_on_unprocessable_entity_error
 
         response: Optional[httpx.Response] = None
+        managed_context = self._managed_xai_oauth_context(litellm_params)
+        auth_retried = False
+        max_attempts = max(max_retry_on_unprocessable_entity_error, 1) + (1 if managed_context is not None else 0)
 
-        for i in range(max(max_retry_on_unprocessable_entity_error, 1)):
+        for i in range(max_attempts):
             try:
                 response = sync_httpx_client.post(
                     url=api_base,
@@ -399,15 +433,26 @@ class BaseLLMHTTPHandler:
                     logging_obj=logging_obj,
                 )
             except httpx.HTTPStatusError as e:
-                hit_max_retry = i + 1 == max_retry_on_unprocessable_entity_error
+                if e.response.status_code == 401 and managed_context is not None and not auth_retried:
+                    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+                    credential_name, rejected_token = managed_context
+                    refreshed = CredentialAccessor.force_refresh_after_unauthorized(
+                        credential_name,
+                        rejected_token,
+                    )
+                    if refreshed is not None:
+                        headers = self._replace_bearer_token(headers, refreshed.get("api_key"))
+                        auth_retried = True
+                        continue
+                hit_max_retry = i + 1 >= max_retry_on_unprocessable_entity_error
                 should_retry = provider_config.should_retry_llm_api_inside_llm_translation_on_http_error(
                     e=e, litellm_params=litellm_params
                 )
                 if should_retry and not hit_max_retry:
                     data = provider_config.transform_request_on_unprocessable_entity_error(e=e, request_data=data)
                     continue
-                else:
-                    raise self._handle_error(e=e, provider_config=provider_config)
+                raise self._handle_error(e=e, provider_config=provider_config)
             except Exception as e:
                 raise self._handle_error(e=e, provider_config=provider_config)
             break

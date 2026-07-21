@@ -395,6 +395,41 @@ describe("UI config and public endpoints", () => {
   });
 });
 
+describe("xaiOAuthCredentialImportCall", () => {
+  const originalFetch = global.fetch;
+
+  afterEach(() => {
+    global.fetch = originalFetch;
+  });
+
+  it("posts the typed OAuth JSON import payload", async () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify({ success: true })),
+    } as Response);
+    global.fetch = mockFetch;
+
+    const response = await Networking.xaiOAuthCredentialImportCall("test-token", {
+      credential_name: "xai-oauth",
+      auth_json: '{"access_token":"secret"}',
+      overwrite_existing: true,
+    });
+
+    expect(response).toEqual({ success: true });
+    expect(mockFetch).toHaveBeenCalledOnce();
+    const [url, init] = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(url).toContain("/credentials/xai/oauth/import");
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(
+      JSON.stringify({
+        credential_name: "xai-oauth",
+        auth_json: '{"access_token":"secret"}',
+        overwrite_existing: true,
+      }),
+    );
+  });
+});
+
 describe("individualModelHealthCheckCall", () => {
   const originalFetch = global.fetch;
 

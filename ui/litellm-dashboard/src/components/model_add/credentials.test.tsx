@@ -93,6 +93,31 @@ describe("CredentialsPanel", () => {
     expect(mockChatGPTSubscriptionStatusCall).not.toHaveBeenCalled();
   });
 
+  it("shows the OAuth JSON badge without requesting ChatGPT quota for xAI", () => {
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "xai-oauth",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "xai", auth_type: "oauth_json_import" },
+      },
+    ];
+
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "proxy_admin" });
+    mockUseCredentials.mockReturnValue({
+      data: { credentials },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("OAuth JSON")).toBeInTheDocument();
+    expect(mockChatGPTSubscriptionStatusCall).not.toHaveBeenCalled();
+  });
+
   it("should display ChatGPT subscription status for ChatGPT credentials", async () => {
     const credentials: CredentialItem[] = [
       {
@@ -300,6 +325,46 @@ describe("CredentialsPanel", () => {
     await waitFor(() => {
       expect(screen.getByText("Add New Credential")).toBeInTheDocument();
     });
+  });
+
+  it("allows proxy_admin to modify credentials", () => {
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "proxy_admin" });
+    mockUseCredentials.mockReturnValue({
+      data: { credentials: [] },
+      refetch: vi.fn(),
+    });
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByRole("button", { name: /add credential/i })).toBeInTheDocument();
+  });
+
+  it("keeps proxy_admin_viewer read-only", () => {
+    const credentials: CredentialItem[] = [
+      {
+        credential_name: "openai-key",
+        credential_values: {},
+        credential_info: { custom_llm_provider: "openai" },
+      },
+    ];
+    mockUseAuthorized.mockReturnValue({ accessToken: "test-token", userRole: "proxy_admin_viewer" });
+    mockUseCredentials.mockReturnValue({
+      data: { credentials },
+      refetch: vi.fn(),
+    });
+
+    const { container } = render(
+      <QueryClientProvider client={createQueryClient()}>
+        <CredentialsPanel uploadProps={DEFAULT_UPLOAD_PROPS} />
+      </QueryClientProvider>,
+    );
+
+    expect(screen.getByText("openai-key")).toBeInTheDocument();
+    expect(container.querySelectorAll("button")).toHaveLength(0);
   });
 
   describe("Admin Viewer write-action gating", () => {

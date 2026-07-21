@@ -2,7 +2,8 @@
 CRUD endpoints for storing reusable credentials.
 """
 
-from typing import Annotated, Optional
+import time
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel
@@ -13,6 +14,7 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.litellm_core_utils.url_utils import SSRFError, validate_url
 from litellm.llms.chatgpt.device_authorization import ChatGPTDeviceAuthorizationProvider
 from litellm.llms.github_copilot.device_authorization import GitHubCopilotDeviceAuthorizationProvider
+from litellm.llms.xai.oauth import XAIAuthRecord, XAIOAuthAuthenticator, XAIOAuthError, parse_xai_auth_json
 from litellm.proxy._types import CommonProxyErrors, LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_timezone, get_current_budget_date
@@ -68,7 +70,7 @@ router = APIRouter()
 
 class ChatGPTDeviceLoginStartRequest(BaseModel):
     credential_name: str
-    api_base: Optional[str] = None
+    api_base: str | None = None
     overwrite_existing: bool = False
 
 
@@ -82,6 +84,84 @@ class ChatGPTCredentialAuth(BaseModel):
     account_id: str | None = None
     plan_label: str | None = None
     daily_snapshot: ChatGPTDailyQuotaSnapshot | None = None
+
+
+class XAIOAuthImportRequest(BaseModel):
+    credential_name: str
+    auth_json: str
+    overwrite_existing: bool = False
+
+
+class XAIOAuthImportResponse(BaseModel):
+    success: Literal[True]
+    credential_name: str
+    expires_at: int
+    status: Literal["active"]
+
+
+_XAI_AUTH_JSON_MAX_BYTES = 64 * 1024
+
+
+def _require_proxy_admin(user_api_key_dict: UserAPIKeyAuth) -> None:
+    if user_api_key_dict.user_role not in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN.value):
+        raise HTTPException(status_code=403, detail="Proxy Admin role is required")
+
+
+def _reject_managed_oauth_metadata(credential_info: dict[object, object]) -> None:
+    if credential_info.get("auth_type") == "oauth_json_import":
+        raise HTTPException(status_code=400, detail="Use the xAI OAuth import endpoint for managed credentials")
+
+
+def _xai_credential_values(auth_record: XAIAuthRecord) -> dict[str, str]:
+    return {
+        "api_key": auth_record.access_token,
+        "xai_oauth_refresh_token": auth_record.refresh_token,
+        "xai_oauth_expires_at": str(auth_record.expires_at),
+        "xai_oauth_token_endpoint": auth_record.token_endpoint,
+    }
+
+
+@router.post(
+    "/credentials/xai/oauth/import",
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=XAIOAuthImportResponse,
+    tags=["credential management"],
+)
+async def import_xai_oauth_credential(
+    body: XAIOAuthImportRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> XAIOAuthImportResponse:
+    from litellm.proxy.proxy_server import prisma_client
+
+    _require_proxy_admin(user_api_key_dict)
+    if len(body.auth_json.encode("utf-8")) > _XAI_AUTH_JSON_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="xAI OAuth credential JSON exceeds 64 KiB")
+    if prisma_client is None:
+        raise HTTPException(status_code=500, detail={"error": CommonProxyErrors.db_not_connected_error.value})
+    try:
+        auth_record = parse_xai_auth_json(body.auth_json)
+        if auth_record.expires_at <= int(time.time()):
+            auth_record = await XAIOAuthAuthenticator().async_refresh_auth_record(auth_record)
+    except XAIOAuthError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    credential = CredentialItem(
+        credential_name=body.credential_name,
+        credential_values=_xai_credential_values(auth_record),
+        credential_info={"custom_llm_provider": "xai", "auth_type": "oauth_json_import"},
+    )
+    result = await CredentialWriter(CredentialsRepository(prisma_client)).save(
+        credential=credential,
+        actor_id=user_api_key_dict.user_id,
+        overwrite_existing=body.overwrite_existing,
+    )
+    if isinstance(result, CredentialConflict):
+        raise HTTPException(status_code=409, detail="Credential already exists")
+    return XAIOAuthImportResponse(
+        success=True,
+        credential_name=body.credential_name,
+        expires_at=auth_record.expires_at,
+        status="active",
+    )
 
 
 @router.post(
@@ -103,6 +183,7 @@ async def create_credential(
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
     try:
+        _reject_managed_oauth_metadata(credential.credential_info)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,
@@ -159,7 +240,7 @@ def _device_login_owner_id(user_api_key_dict: UserAPIKeyAuth) -> str:
 
 def _build_device_login_state_store(
     prisma_client: PrismaClient,
-    redis_usage_cache: Optional[RedisDeviceLoginCache],
+    redis_usage_cache: RedisDeviceLoginCache | None,
 ) -> DeviceLoginStateStore:
     if redis_usage_cache is not None:
         return RedisDeviceLoginStateStore(redis_usage_cache)
@@ -608,6 +689,7 @@ async def update_credential(
     from litellm.proxy.proxy_server import prisma_client
 
     try:
+        _reject_managed_oauth_metadata(credential.credential_info)
         if prisma_client is None:
             raise HTTPException(
                 status_code=500,

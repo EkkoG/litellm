@@ -9,10 +9,11 @@ import time
 import uuid
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 from urllib.parse import parse_qs, urlencode, urlparse
 
 import httpx
+from pydantic import BaseModel, ConfigDict, StrictInt, StrictStr, field_validator
 
 from litellm._logging import verbose_logger
 from litellm.constants import XAI_API_BASE
@@ -37,6 +38,71 @@ class XAIOAuthError(Exception):
 
 class XAIOAuthLoginRequiredError(XAIOAuthError):
     pass
+
+
+class XAIAuthRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    access_token: StrictStr
+    refresh_token: StrictStr
+    id_token: StrictStr | None = None
+    token_type: StrictStr = "Bearer"
+    token_endpoint: StrictStr
+    expires_at: StrictInt
+
+    @field_validator("access_token", "refresh_token", "token_endpoint")
+    @classmethod
+    def validate_required_string(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("must be a non-empty string")
+        return value
+
+    @field_validator("id_token")
+    @classmethod
+    def validate_optional_string(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("must be a non-empty string when present")
+        return value
+
+    @field_validator("token_type")
+    @classmethod
+    def validate_token_type(cls, value: str) -> str:
+        if value.lower() != "bearer":
+            raise ValueError("must be Bearer")
+        return "Bearer"
+
+    @field_validator("token_endpoint")
+    @classmethod
+    def validate_token_endpoint(cls, value: str) -> str:
+        return _validate_xai_oauth_endpoint(value)
+
+    @field_validator("expires_at")
+    @classmethod
+    def validate_expires_at(cls, value: int) -> int:
+        if value <= 0:
+            raise ValueError("must be a positive Unix timestamp")
+        return value
+
+
+def _validate_xai_oauth_endpoint(url: str) -> str:
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+        or (host != "x.ai" and not host.endswith(".x.ai"))
+    ):
+        raise ValueError("xAI OAuth endpoint must use HTTPS on x.ai")
+    return url
+
+
+def parse_xai_auth_json(raw: str) -> XAIAuthRecord:
+    try:
+        return XAIAuthRecord.model_validate_json(raw)
+    except ValueError as exc:
+        raise XAIOAuthError("Invalid xAI OAuth credential JSON") from exc
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
@@ -81,11 +147,11 @@ class _CallbackHandler(BaseHTTPRequestHandler):
 
 class _CallbackServer(HTTPServer):
     expected_state: str
-    callback_result: Optional[Dict[str, Optional[str]]]
+    callback_result: Dict[str, str | None] | None
 
 
 class XAIOAuthAuthenticator:
-    def __init__(self, http_client: Optional[Union[httpx.Client, HTTPHandler]] = None) -> None:
+    def __init__(self, http_client: Union[httpx.Client, HTTPHandler] | None = None) -> None:
         self.token_dir = get_secret_str("XAI_OAUTH_TOKEN_DIR") or os.path.expanduser("~/.config/litellm/xai_oauth")
         self.auth_file = os.path.join(self.token_dir, get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json")
         self.http_client = http_client
@@ -177,7 +243,7 @@ class XAIOAuthAuthenticator:
         except OSError:
             verbose_logger.debug("Could not chmod xAI OAuth token directory")
 
-    def _read_auth_file(self) -> Optional[Dict[str, Any]]:
+    def _read_auth_file(self) -> Dict[str, Any] | None:
         try:
             with open(self.auth_file, "r") as f:
                 data = json.load(f)
@@ -247,11 +313,10 @@ class XAIOAuthAuthenticator:
         }
 
     def _validate_xai_endpoint(self, url: str) -> str:
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
-        if parsed.scheme != "https" or (host != "x.ai" and not host.endswith(".x.ai")):
-            raise XAIOAuthError(f"xAI OAuth discovery returned unexpected endpoint: {url}")
-        return url
+        try:
+            return _validate_xai_oauth_endpoint(url)
+        except ValueError as exc:
+            raise XAIOAuthError(f"xAI OAuth discovery returned unexpected endpoint: {url}") from exc
 
     def _pkce_pair(self) -> Tuple[str, str]:
         verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
@@ -259,7 +324,7 @@ class XAIOAuthAuthenticator:
         return verifier, challenge
 
     def _start_callback_server(self, state: str) -> Tuple[_CallbackServer, str]:
-        last_error: Optional[OSError] = None
+        last_error: OSError | None = None
         for port in (XAI_OAUTH_REDIRECT_PORT, 0):
             try:
                 server = _CallbackServer((XAI_OAUTH_REDIRECT_HOST, port), _CallbackHandler)
@@ -292,7 +357,7 @@ class XAIOAuthAuthenticator:
         }
         return f"{authorization_endpoint}?{urlencode(params)}"
 
-    def _wait_for_callback(self, server: _CallbackServer) -> Dict[str, Optional[str]]:
+    def _wait_for_callback(self, server: _CallbackServer) -> Dict[str, str | None]:
         server.timeout = 1
         deadline = time.time() + XAI_OAUTH_CALLBACK_TIMEOUT_SECONDS
         try:
@@ -316,9 +381,49 @@ class XAIOAuthAuthenticator:
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise XAIOAuthError(
-                f"xAI OAuth token request failed: {exc.response.status_code} {exc.response.text}"
-            ) from exc
+            raise XAIOAuthError(f"xAI OAuth token request failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise XAIOAuthError("xAI OAuth token request failed") from exc
+        return self._parse_token_response(response)
+
+    async def async_exchange_token(
+        self,
+        token_endpoint: str,
+        data: Dict[str, str],
+        http_client: httpx.AsyncClient | None = None,
+    ) -> Dict[str, Any]:
+        validated_endpoint = self._validate_xai_endpoint(token_endpoint)
+        try:
+            if http_client is not None:
+                response = await http_client.post(
+                    validated_endpoint,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    data=data,
+                )
+            else:
+                from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+                from litellm.types.utils import LlmProviders
+
+                response = await get_async_httpx_client(llm_provider=LlmProviders.XAI).post(
+                    validated_endpoint,
+                    headers={
+                        "Accept": "application/json",
+                        "Content-Type": "application/x-www-form-urlencoded",
+                    },
+                    data=data,
+                )
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise XAIOAuthError(f"xAI OAuth token request failed: {exc.response.status_code}") from exc
+        except httpx.RequestError as exc:
+            raise XAIOAuthError("xAI OAuth token request failed") from exc
+        return self._parse_token_response(response)
+
+    @staticmethod
+    def _parse_token_response(response: httpx.Response) -> Dict[str, Any]:
         try:
             body = response.json()
         except ValueError as exc:
@@ -331,7 +436,7 @@ class XAIOAuthAuthenticator:
         self,
         token_payload: Dict[str, Any],
         token_endpoint: str,
-        fallback_refresh_token: Optional[str] = None,
+        fallback_refresh_token: str | None = None,
     ) -> Dict[str, Any]:
         access_token = token_payload.get("access_token")
         refresh_token = token_payload.get("refresh_token") or fallback_refresh_token
@@ -339,7 +444,7 @@ class XAIOAuthAuthenticator:
             raise XAIOAuthError("xAI OAuth token response missing access_token")
         if not refresh_token:
             raise XAIOAuthError("xAI OAuth token response missing refresh_token")
-        expires_in = token_payload.get("expires_in") or 3600
+        expires_in = token_payload.get("expires_in", 3600)
         try:
             expires_at = int(time.time() + int(expires_in))
         except (TypeError, ValueError):
@@ -354,30 +459,65 @@ class XAIOAuthAuthenticator:
         }
 
     def _refresh_tokens(self, auth_data: Dict[str, Any]) -> Dict[str, Any]:
-        token_endpoint = auth_data.get("token_endpoint")
-        if not token_endpoint:
-            token_endpoint = self._discover()["token_endpoint"]
-        token_endpoint = self._validate_xai_endpoint(token_endpoint)
+        token_endpoint = auth_data.get("token_endpoint") or self._discover()["token_endpoint"]
         refresh_token = auth_data.get("refresh_token")
-        if not refresh_token:
+        if not isinstance(refresh_token, str) or not refresh_token:
             raise XAIOAuthLoginRequiredError("xAI OAuth refresh token missing. Run `litellm xai-oauth login`.")
+        refreshed = self.refresh_auth_record(
+            XAIAuthRecord(
+                access_token=str(auth_data.get("access_token") or "expired"),
+                refresh_token=refresh_token,
+                id_token=auth_data.get("id_token") if isinstance(auth_data.get("id_token"), str) else None,
+                token_type=str(auth_data.get("token_type") or "Bearer"),
+                token_endpoint=str(token_endpoint),
+                expires_at=int(float(auth_data.get("expires_at") or 1)),
+            )
+        )
+        serialized = refreshed.model_dump(exclude_none=True)
+        self._write_auth_file(serialized)
+        return serialized
 
+    def refresh_auth_record(self, auth_record: XAIAuthRecord) -> XAIAuthRecord:
+        token_endpoint = self._validate_xai_endpoint(auth_record.token_endpoint)
         token_payload = self._exchange_token(
             token_endpoint,
             {
                 "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
+                "refresh_token": auth_record.refresh_token,
                 "client_id": XAI_OAUTH_CLIENT_ID,
             },
         )
-        refreshed = self._build_auth_record(
-            token_payload,
-            token_endpoint,
-            fallback_refresh_token=refresh_token,
+        return XAIAuthRecord.model_validate(
+            self._build_auth_record(
+                token_payload,
+                token_endpoint,
+                fallback_refresh_token=auth_record.refresh_token,
+            )
         )
-        self._write_auth_file(refreshed)
-        return refreshed
+
+    async def async_refresh_auth_record(
+        self,
+        auth_record: XAIAuthRecord,
+        http_client: httpx.AsyncClient | None = None,
+    ) -> XAIAuthRecord:
+        token_endpoint = self._validate_xai_endpoint(auth_record.token_endpoint)
+        token_payload = await self.async_exchange_token(
+            token_endpoint,
+            {
+                "grant_type": "refresh_token",
+                "refresh_token": auth_record.refresh_token,
+                "client_id": XAI_OAUTH_CLIENT_ID,
+            },
+            http_client=http_client,
+        )
+        return XAIAuthRecord.model_validate(
+            self._build_auth_record(
+                token_payload,
+                token_endpoint,
+                fallback_refresh_token=auth_record.refresh_token,
+            )
+        )
 
 
-def should_use_xai_oauth(litellm_params: Optional[Dict[str, Any]]) -> bool:
+def should_use_xai_oauth(litellm_params: Dict[str, Any] | None) -> bool:
     return bool((litellm_params or {}).get("use_xai_oauth"))

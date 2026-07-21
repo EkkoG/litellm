@@ -143,6 +143,25 @@ describe("useCredentials", () => {
     expect(credentialListCall).not.toHaveBeenCalled();
   });
 
+  it("does not request shared credentials for org_admin", () => {
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userRole: "org_admin",
+      userId: "test-user-id",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+
+    const { result } = renderHook(() => useCredentials(), { wrapper });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.isFetched).toBe(false);
+    expect(credentialListCall).not.toHaveBeenCalled();
+  });
+
   it("should return empty credentials array when API returns empty data", async () => {
     // Mock API returning empty credentials array
     (credentialListCall as any).mockResolvedValue({ credentials: [] });

@@ -2654,6 +2654,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/credentials/xai/oauth/import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Xai Oauth Credential */
+        post: operations["import_xai_oauth_credential_credentials_xai_oauth_import_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/credentials/{credential_name}": {
         parameters: {
             query?: never;
@@ -26243,6 +26260,12 @@ export interface components {
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
             litellm_trace_id?: string | null;
+            /** Managed Credential Auth Type */
+            managed_credential_auth_type?: string | null;
+            /** Managed Credential Name */
+            managed_credential_name?: string | null;
+            /** Managed Credential Provider */
+            managed_credential_provider?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max File Size Mb */
@@ -26388,6 +26411,12 @@ export interface components {
             vertex_project?: string | null;
             /** Watsonx Region Name */
             watsonx_region_name?: string | null;
+            /** Xai Oauth Expires At */
+            xai_oauth_expires_at?: string | null;
+            /** Xai Oauth Refresh Token */
+            xai_oauth_refresh_token?: string | null;
+            /** Xai Oauth Token Endpoint */
+            xai_oauth_token_endpoint?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -33926,6 +33955,35 @@ export interface components {
             /** Status */
             status?: ("pending" | "running" | "paused" | "completed" | "failed") | null;
         };
+        /** XAIOAuthImportRequest */
+        XAIOAuthImportRequest: {
+            /** Auth Json */
+            auth_json: string;
+            /** Credential Name */
+            credential_name: string;
+            /**
+             * Overwrite Existing
+             * @default false
+             */
+            overwrite_existing: boolean;
+        };
+        /** XAIOAuthImportResponse */
+        XAIOAuthImportResponse: {
+            /** Credential Name */
+            credential_name: string;
+            /** Expires At */
+            expires_at: number;
+            /**
+             * Status
+             * @constant
+             */
+            status: "active";
+            /**
+             * Success
+             * @constant
+             */
+            success: true;
+        };
         /** ModelInfo */
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
@@ -34145,6 +34203,12 @@ export interface components {
             litellm_credential_name?: string | null;
             /** Litellm Trace Id */
             litellm_trace_id?: string | null;
+            /** Managed Credential Auth Type */
+            managed_credential_auth_type?: string | null;
+            /** Managed Credential Name */
+            managed_credential_name?: string | null;
+            /** Managed Credential Provider */
+            managed_credential_provider?: string | null;
             /** Max Budget */
             max_budget?: number | null;
             /** Max File Size Mb */
@@ -34290,6 +34354,12 @@ export interface components {
             vertex_project?: string | null;
             /** Watsonx Region Name */
             watsonx_region_name?: string | null;
+            /** Xai Oauth Expires At */
+            xai_oauth_expires_at?: string | null;
+            /** Xai Oauth Refresh Token */
+            xai_oauth_refresh_token?: string | null;
+            /** Xai Oauth Token Endpoint */
+            xai_oauth_token_endpoint?: string | null;
         } & {
             [key: string]: unknown;
         };
@@ -38485,6 +38555,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    import_xai_oauth_credential_credentials_xai_oauth_import_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["XAIOAuthImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["XAIOAuthImportResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

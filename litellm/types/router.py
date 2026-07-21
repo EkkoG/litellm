@@ -192,6 +192,12 @@ class CredentialLiteLLMParams(BaseModel):
     chatgpt_id_token: Optional[str] = None
     chatgpt_account_id: Optional[str] = None
     chatgpt_expires_at: Optional[str] = None
+    xai_oauth_refresh_token: Optional[str] = None
+    xai_oauth_expires_at: Optional[str] = None
+    xai_oauth_token_endpoint: Optional[str] = None
+    managed_credential_name: Optional[str] = None
+    managed_credential_provider: Optional[str] = None
+    managed_credential_auth_type: Optional[str] = None
     github_copilot_access_token: Optional[str] = None
     ## AZURE OAUTH ##
     # Without this field, ``get_deployment_credentials_with_provider``

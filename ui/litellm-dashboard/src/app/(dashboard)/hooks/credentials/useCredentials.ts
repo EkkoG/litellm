@@ -6,10 +6,11 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 const credentialsKeys = createQueryKeys("credentials");
 
 export const useCredentials = () => {
-  const { accessToken } = useAuthorized();
+  const { accessToken, userRole } = useAuthorized();
+  const canAccessSharedCredentials = userRole !== "org_admin";
   return useQuery<CredentialsResponse>({
     queryKey: credentialsKeys.list({}),
     queryFn: async () => await credentialListCall(accessToken!),
-    enabled: Boolean(accessToken),
+    enabled: Boolean(accessToken) && canAccessSharedCredentials,
   });
 };

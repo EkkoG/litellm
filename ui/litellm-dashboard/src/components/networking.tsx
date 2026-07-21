@@ -222,6 +222,7 @@ export interface CredentialItem {
   credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
+    auth_type?: string;
     description?: string;
     required?: boolean;
   };
@@ -2648,6 +2649,26 @@ export const chatgptCredentialDeviceStartCall = async (
   formValues: { credential_name: string; overwrite_existing?: boolean },
 ) =>
   apiClient.post(`/credentials/chatgpt/device/start`, {
+    accessToken,
+    body: formValues,
+  });
+
+export interface XAIOAuthCredentialImportRequest {
+  credential_name: string;
+  auth_json: string;
+  overwrite_existing: boolean;
+}
+
+export interface XAIOAuthCredentialImportResponse {
+  success: boolean;
+  message?: string;
+}
+
+export const xaiOAuthCredentialImportCall = async (
+  accessToken: string,
+  formValues: XAIOAuthCredentialImportRequest,
+): Promise<XAIOAuthCredentialImportResponse> =>
+  apiClient.post<XAIOAuthCredentialImportResponse>(`/credentials/xai/oauth/import`, {
     accessToken,
     body: formValues,
   });

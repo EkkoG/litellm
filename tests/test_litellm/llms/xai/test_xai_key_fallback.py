@@ -2,9 +2,7 @@ import asyncio
 import os
 import sys
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
+sys.path.insert(0, os.path.abspath("../../../.."))  # Adds the parent directory to the system path
 
 import pytest
 
@@ -35,10 +33,7 @@ def test_get_api_key_prefers_explicit_key_for_both_orderings(monkeypatch):
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
 
     assert XAIModelInfo.get_api_key("param_api_key") == "param_api_key"
-    assert (
-        XAIModelInfo.get_api_key("param_api_key", legacy_generic_before_env=True)
-        == "param_api_key"
-    )
+    assert XAIModelInfo.get_api_key("param_api_key", legacy_generic_before_env=True) == "param_api_key"
 
 
 def test_get_api_key_prefers_environment_over_generic_key_by_default(monkeypatch):
@@ -57,15 +52,12 @@ def test_get_api_key_does_not_use_generic_key_by_default(monkeypatch):
     assert XAIModelInfo.get_api_key(None) is None
 
 
-def test_get_api_key_legacy_order_prefers_generic_key_over_env(monkeypatch):
+def test_get_api_key_legacy_flag_does_not_expose_generic_key(monkeypatch):
     monkeypatch.setattr(litellm, "xai_key", None)
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
 
-    assert (
-        XAIModelInfo.get_api_key(None, legacy_generic_before_env=True)
-        == "common_api_key"
-    )
+    assert XAIModelInfo.get_api_key(None, legacy_generic_before_env=True) == "env_api_key"
 
 
 def test_get_api_key_legacy_order_prefers_xai_key_over_generic_key(monkeypatch):
@@ -73,10 +65,7 @@ def test_get_api_key_legacy_order_prefers_xai_key_over_generic_key(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
 
-    assert (
-        XAIModelInfo.get_api_key(None, legacy_generic_before_env=True)
-        == "xai_key_value"
-    )
+    assert XAIModelInfo.get_api_key(None, legacy_generic_before_env=True) == "xai_key_value"
 
 
 def test_get_api_key_returns_none_when_no_key_is_available(monkeypatch):
@@ -122,21 +111,19 @@ def test_chat_config_prefers_explicit_api_key(monkeypatch):
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
 
-    _, api_key = XAIChatConfig()._get_openai_compatible_provider_info(
-        None, "param_api_key"
-    )
+    _, api_key = XAIChatConfig()._get_openai_compatible_provider_info(None, "param_api_key")
 
     assert api_key == "param_api_key"
 
 
-def test_responses_config_preserves_generic_key_precedence(monkeypatch):
+def test_responses_config_does_not_expose_generic_key(monkeypatch):
     monkeypatch.setattr(litellm, "xai_key", None)
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
 
     headers = XAIResponsesAPIConfig().validate_environment({}, "xai/grok-3-mini", None)
 
-    assert headers["Authorization"] == "Bearer common_api_key"
+    assert headers["Authorization"] == "Bearer env_api_key"
 
 
 def test_responses_config_prefers_litellm_params_api_key(monkeypatch):
@@ -174,7 +161,7 @@ def test_responses_config_raises_when_no_key_is_available(monkeypatch):
     error_message = str(exc_info.value)
     assert "api_key" in error_message
     assert "litellm.xai_key" in error_message
-    assert "litellm.api_key" in error_message
+    assert "litellm.api_key" not in error_message
     assert "XAI_API_KEY" in error_message
 
 
@@ -197,9 +184,7 @@ def test_realtime_config_uses_xai_key_through_provider_resolution(monkeypatch):
     monkeypatch.setattr(litellm, "xai_key", "xai_key_value")
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
-    monkeypatch.setattr(
-        realtime_main.xai_realtime, "async_realtime", mock_async_realtime
-    )
+    monkeypatch.setattr(realtime_main.xai_realtime, "async_realtime", mock_async_realtime)
 
     asyncio.run(
         realtime_main._arealtime(
@@ -225,9 +210,7 @@ def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(monkeyp
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.setenv("XAI_API_KEY", "env_api_key")
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
-    monkeypatch.setattr(
-        realtime_main.xai_realtime, "async_realtime", mock_async_realtime
-    )
+    monkeypatch.setattr(realtime_main.xai_realtime, "async_realtime", mock_async_realtime)
 
     asyncio.run(
         realtime_main._arealtime(
@@ -240,7 +223,7 @@ def test_realtime_config_uses_xai_key_when_provider_does_not_resolve_key(monkeyp
     assert captured_kwargs["api_key"] == "xai_key_value"
 
 
-def test_realtime_config_uses_generic_key_when_provider_does_not_resolve_key(
+def test_realtime_config_does_not_expose_generic_key_when_provider_does_not_resolve_key(
     monkeypatch,
 ):
     captured_kwargs = {}
@@ -255,9 +238,7 @@ def test_realtime_config_uses_generic_key_when_provider_does_not_resolve_key(
     monkeypatch.setattr(litellm, "api_key", "common_api_key")
     monkeypatch.delenv("XAI_API_KEY", raising=False)
     monkeypatch.setattr(realtime_main, "get_llm_provider", mock_get_llm_provider)
-    monkeypatch.setattr(
-        realtime_main.xai_realtime, "async_realtime", mock_async_realtime
-    )
+    monkeypatch.setattr(realtime_main.xai_realtime, "async_realtime", mock_async_realtime)
 
     asyncio.run(
         realtime_main._arealtime(
@@ -267,7 +248,7 @@ def test_realtime_config_uses_generic_key_when_provider_does_not_resolve_key(
         )
     )
 
-    assert captured_kwargs["api_key"] == "common_api_key"
+    assert captured_kwargs["api_key"] is None
 
 
 def test_get_models_uses_xai_key_fallback(monkeypatch):

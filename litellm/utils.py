@@ -617,8 +617,15 @@ def load_credentials_from_list(kwargs: dict):
 
     credential_name = kwargs.get("litellm_credential_name")
     if credential_name and litellm.credential_list:
+        credential = CredentialAccessor.get_credential(credential_name)
         credential_values = CredentialAccessor.get_credential_values(credential_name)
-        kwargs.update({key: value for key, value in credential_values.items() if key not in kwargs})
+        inserted_keys = frozenset(key for key in credential_values if key not in kwargs)
+        kwargs.update({key: value for key, value in credential_values.items() if key in inserted_keys})
+        credential_info = credential.credential_info if credential is not None else {}
+        if "api_key" in inserted_keys and credential_info.get("auth_type") == "oauth_json_import":
+            kwargs["managed_credential_name"] = credential_name
+            kwargs["managed_credential_provider"] = credential_info.get("custom_llm_provider")
+            kwargs["managed_credential_auth_type"] = credential_info.get("auth_type")
 
 
 async def async_load_credentials_from_list(kwargs: dict) -> None:
@@ -626,8 +633,15 @@ async def async_load_credentials_from_list(kwargs: dict) -> None:
 
     credential_name = kwargs.get("litellm_credential_name")
     if credential_name and litellm.credential_list:
+        credential = CredentialAccessor.get_credential(credential_name)
         credential_values = await CredentialAccessor.get_credential_values_async(credential_name)
-        kwargs.update({key: value for key, value in credential_values.items() if key not in kwargs})
+        inserted_keys = frozenset(key for key in credential_values if key not in kwargs)
+        kwargs.update({key: value for key, value in credential_values.items() if key in inserted_keys})
+        credential_info = credential.credential_info if credential is not None else {}
+        if "api_key" in inserted_keys and credential_info.get("auth_type") == "oauth_json_import":
+            kwargs["managed_credential_name"] = credential_name
+            kwargs["managed_credential_provider"] = credential_info.get("custom_llm_provider")
+            kwargs["managed_credential_auth_type"] = credential_info.get("auth_type")
 
 
 def get_dynamic_callbacks(

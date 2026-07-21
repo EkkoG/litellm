@@ -45,6 +45,10 @@ const getCredentialProvider = (credential: CredentialItem): string =>
 const isChatGPTCredential = (credential: CredentialItem): boolean =>
   getCredentialProvider(credential) === CHATGPT_PROVIDER;
 
+const isXAIOAuthCredential = (credential: CredentialItem): boolean =>
+  getCredentialProvider(credential) === "xai" &&
+  String(credential.credential_info?.auth_type || "").toLowerCase() === "oauth_json_import";
+
 const tierColor = (remainingPercent: number): "green" | "yellow" | "red" => {
   if (remainingPercent <= 10) return "red";
   if (remainingPercent <= 30) return "yellow";
@@ -434,10 +438,21 @@ const CredentialsPanel: React.FC<CredentialsPanelProps> = ({ uploadProps }) => {
                 <TableRow key={index}>
                   <TableCell>{credential.credential_name}</TableCell>
                   <TableCell>
-                    {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {renderProviderBadge((credential.credential_info?.custom_llm_provider as string) || "-")}
+                      {isXAIOAuthCredential(credential) && (
+                        <Badge color="gray" size="xs">
+                          OAuth JSON
+                        </Badge>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>
-                    <ChatGPTSubscriptionStatusCell credential={credential} accessToken={accessToken || undefined} />
+                    {isXAIOAuthCredential(credential) ? (
+                      <Text>-</Text>
+                    ) : (
+                      <ChatGPTSubscriptionStatusCell credential={credential} accessToken={accessToken || undefined} />
+                    )}
                   </TableCell>
                   <TableCell>
                     {canModifyCredentials ? (

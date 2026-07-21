@@ -787,8 +787,9 @@ async def proxy_shutdown_event():
     from litellm.proxy.credential_endpoints.chatgpt_credential_utils import (
         drain_chatgpt_credential_refreshes,
     )
+    from litellm.proxy.credential_endpoints.xai_credential_utils import drain_xai_credential_refreshes
 
-    await drain_chatgpt_credential_refreshes()
+    await asyncio.gather(drain_chatgpt_credential_refreshes(), drain_xai_credential_refreshes())
     if prisma_client:
         verbose_proxy_logger.debug("Disconnecting from Prisma")
         await prisma_client.disconnect()
