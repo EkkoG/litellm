@@ -2,6 +2,8 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import hashlib
+import json
 import os
 import platform
 from typing import Any, Optional, Union
@@ -271,7 +273,7 @@ def _normalize_litellm_params(litellm_params: Optional[Any]) -> dict:
     return {}
 
 
-def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
+def get_explicit_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
     params = _normalize_litellm_params(litellm_params)
     for key in ("litellm_session_id", "session_id"):
         value = params.get(key)
@@ -289,6 +291,14 @@ def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
             for key, value in headers.items():
                 if isinstance(key, str) and key.lower() in ("session-id", "session_id") and value:
                     return str(value)
+    return None
+
+
+def get_chatgpt_session_id(litellm_params: Optional[Any]) -> Optional[str]:
+    explicit = get_explicit_chatgpt_session_id(litellm_params)
+    if explicit:
+        return explicit
+    params = _normalize_litellm_params(litellm_params)
     litellm_trace_id = params.get("litellm_trace_id")
     if litellm_trace_id:
         return str(litellm_trace_id)
@@ -318,3 +328,66 @@ def get_chatgpt_thread_id(litellm_params: Any | None) -> str | None:
 
 def ensure_chatgpt_session_id(litellm_params: Optional[Any]) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())
+
+
+def _extract_text_content(content: Any) -> Optional[str]:
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    parts = []
+    for block in content:
+        if isinstance(block, str):
+            parts.append(block)
+        elif isinstance(block, dict):
+            text = block.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+    return "\n".join(parts) if parts else None
+
+
+def _message_role(message: Any) -> Optional[str]:
+    if isinstance(message, dict):
+        role = message.get("role")
+        return role if isinstance(role, str) else None
+    role = getattr(message, "role", None)
+    return role if isinstance(role, str) else None
+
+
+def _message_content(message: Any) -> Any:
+    if isinstance(message, dict):
+        return message.get("content")
+    return getattr(message, "content", None)
+
+
+def build_chatgpt_session_prefix_fingerprint(messages: Any, account_id: Optional[str]) -> Optional[str]:
+    if not isinstance(messages, (list, tuple)) or not messages:
+        return None
+    system_text: Optional[str] = None
+    first_user_text: Optional[str] = None
+    for message in messages:
+        role = _message_role(message)
+        if role == "system" and system_text is None:
+            system_text = _extract_text_content(_message_content(message))
+        elif role == "user":
+            first_user_text = _extract_text_content(_message_content(message))
+            break
+    if system_text is None and first_user_text is None:
+        return None
+    payload = {
+        "account_id": account_id or "",
+        "system": system_text or "",
+        "first_user": first_user_text or "",
+    }
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def derive_chatgpt_session_id(litellm_params: Optional[Any], messages: Any, account_id: Optional[str]) -> str:
+    existing = get_explicit_chatgpt_session_id(litellm_params)
+    if existing:
+        return existing
+    fingerprint = build_chatgpt_session_prefix_fingerprint(messages, account_id)
+    if fingerprint:
+        return fingerprint
+    return str(uuid4())

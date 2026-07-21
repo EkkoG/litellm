@@ -30,10 +30,12 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
+    derive_chatgpt_session_id,
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
     get_chatgpt_thread_id,
+    get_explicit_chatgpt_session_id,
 )
 
 
@@ -98,9 +100,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        normalized_input = self._normalize_input_for_chatgpt(input)
+        self._apply_derived_session_id_header(normalized_input, litellm_params, headers)
         request = super().transform_responses_api_request(
             model,
-            self._normalize_input_for_chatgpt(input),
+            normalized_input,
             response_api_optional_request_params,
             litellm_params,
             headers,
@@ -136,6 +140,21 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
+
+    def _apply_derived_session_id_header(
+        self,
+        input: str | ResponseInputParam,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> None:
+        if get_explicit_chatgpt_session_id(litellm_params):
+            return
+        account_id = self.authenticator.get_account_id(litellm_params=litellm_params)
+        derived = derive_chatgpt_session_id(litellm_params, input, account_id)
+        for key in list(headers.keys()):
+            if isinstance(key, str) and key.lower() in ("session_id", "session-id"):
+                del headers[key]
+        headers["session_id"] = derived
 
     def get_provider_request_diagnostics(
         self,
