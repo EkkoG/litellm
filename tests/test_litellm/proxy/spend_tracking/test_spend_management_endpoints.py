@@ -70,11 +70,11 @@ def _reconstruct_ui_where_from_sql(sql_query, params):
     ``ui_view_spend_logs`` computes the total with a bounded
     ``SELECT COUNT(*) FROM (SELECT 1 ... LIMIT $cap+1)`` query and fetches the
     page with a separate ``ORDER BY ... LIMIT/OFFSET`` query. Both carry the
-    same WHERE clause, so the terminator can be ``ORDER BY`` (page query) or
-    ``LIMIT`` (bounded count query).
+    same WHERE clause, so the terminator can be ``GROUP BY`` (session count),
+    ``ORDER BY`` (page query), or ``LIMIT`` (request count).
     """
     where: dict = {}
-    clause = re.search(r"WHERE (.*?)\s+(?:ORDER BY|LIMIT)", sql_query, re.DOTALL)
+    clause = re.search(r"WHERE (.*?)\s+(?:GROUP BY|ORDER BY|LIMIT)", sql_query, re.DOTALL)
     if clause is None:
         return where
 
