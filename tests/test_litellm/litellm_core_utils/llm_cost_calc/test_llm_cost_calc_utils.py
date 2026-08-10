@@ -44,6 +44,29 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
 from litellm.types.utils import CacheCreationTokenDetails, Usage
 
 
+def test_chatgpt_codex_auto_review_pricing() -> None:
+    repository_root = os.path.abspath(os.path.join(os.path.dirname(litellm.__file__), ".."))
+    main_price_map_path = os.path.join(repository_root, "model_prices_and_context_window.json")
+    backup_price_map_path = os.path.join(
+        os.path.dirname(litellm.__file__),
+        "model_prices_and_context_window_backup.json",
+    )
+
+    with open(main_price_map_path) as main_price_map_file, open(backup_price_map_path) as backup_price_map_file:
+        main_price_map = json.load(main_price_map_file)
+        backup_price_map = json.load(backup_price_map_file)
+
+    model = "chatgpt/codex-auto-review"
+    expected_pricing = {
+        "input_cost_per_token": 2.5e-06,
+        "cache_read_input_token_cost": 2.5e-07,
+        "output_cost_per_token": 2.5e-05,
+    }
+
+    assert main_price_map[model] == backup_price_map[model]
+    assert {key: main_price_map[model][key] for key in expected_pricing} == expected_pricing
+
+
 def test_reasoning_tokens_no_price_set():
     # Use o1 - o1-mini was deprecated/renamed; o1 has same reasoning-token semantics
     # (no separate output_cost_per_reasoning_token, so all completion tokens use output_cost_per_token)

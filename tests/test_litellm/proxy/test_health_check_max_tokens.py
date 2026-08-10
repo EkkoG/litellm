@@ -1,3 +1,4 @@
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +11,7 @@ from litellm.proxy.health_check import (
     _resolve_health_check_mode,
     _update_litellm_params_for_health_check,
 )
+from scripts.sync_codex_models_to_chatgpt import parse_model_costs
 
 
 @pytest.mark.asyncio
@@ -286,6 +288,15 @@ def test_no_mode_still_injects_max_tokens():
     updated = _update_litellm_params_for_health_check(model_info, litellm_params)
 
     assert updated["max_tokens"] == 16
+
+
+def test_chatgpt_gpt_image_2_resolves_image_generation_mode():
+    price_map_path = Path(__file__).resolve().parents[3] / "model_prices_and_context_window.json"
+    mode = parse_model_costs(price_map_path.read_text(encoding="utf-8"))["chatgpt/gpt-image-2"]["mode"]
+
+    assert mode == "image_generation"
+    updated = _update_litellm_params_for_health_check({"mode": mode}, {"model": "chatgpt/gpt-image-2"})
+    assert "max_tokens" not in updated
 
 
 # ---------------------------------------------------------------------------
