@@ -157,4 +157,31 @@ describe("BarChart", () => {
     );
     expect(new Set(xPositions).size).toBe(2);
   });
+
+  it("renders one line per lineCategory on a secondary axis with its own colors", () => {
+    const { container } = render(
+      <BarChart
+        data={data}
+        index="date"
+        categories={["passed"]}
+        colors={["cyan"]}
+        lineCategories={["blocked"]}
+        lineColors={["red"]}
+      />,
+    );
+
+    const curves = Array.from(container.querySelectorAll("path.recharts-line-curve"));
+    expect(curves).toHaveLength(1);
+    expect(curves[0].getAttribute("stroke")).toBe("var(--color-red-500, #ef4444)");
+    expect(container.querySelector(".recharts-yAxis.yAxis")).not.toBeNull();
+    const rightAxisTicks = Array.from(container.querySelectorAll(".recharts-cartesian-axis-tick-value"));
+    expect(rightAxisTicks.length).toBeGreaterThan(0);
+  });
+
+  it("renders no lines and no right axis when lineCategories is omitted", () => {
+    const { container } = render(<BarChart data={data} index="date" categories={["passed"]} colors={["cyan"]} />);
+
+    expect(container.querySelector("path.recharts-line-curve")).toBeNull();
+    expect(container.querySelectorAll(".recharts-yAxis")).toHaveLength(1);
+  });
 });

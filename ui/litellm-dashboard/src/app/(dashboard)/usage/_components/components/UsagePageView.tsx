@@ -25,8 +25,19 @@ import {
 import { Alert, Button, Segmented, Select, Tooltip, Typography } from "antd";
 import React, { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 
-import { BarChart } from "@/components/shared/charts";
+import { BarChart, type ChartTooltipProps } from "@/components/shared/charts";
+import { chartColorValue } from "@/components/shared/charts/colors";
+import { ChartContainer, type ChartConfig } from "@/components/ui/chart";
 import { Card as ShadcnCard, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  CartesianGrid,
+  ComposedChart,
+  Line,
+  Legend as RechartsLegend,
+  Tooltip as RechartsTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import { useAgents } from "@/app/(dashboard)/hooks/agents/useAgents";
 import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
@@ -52,6 +63,13 @@ import UserAgentActivity from "@/components/user_agent_activity";
 import ViewUserSpend from "@/components/view_user_spend";
 import { usePaginatedDailyActivity } from "../hooks/usePaginatedDailyActivity";
 import { DailyData, KeyMetricWithMetadata, MetricWithMetadata } from "@/components/UsagePage/types";
+import {
+  RATE_DIMENSIONS,
+  SPEND_DIMENSIONS,
+  TOKEN_COUNT_DIMENSIONS,
+  TOKEN_LINE_DIMENSIONS,
+  formatTokenLineValue,
+} from "@/components/UsagePage/utils/token_line_dimensions";
 import { valueFormatterSpend } from "@/components/UsagePage/utils/value_formatters";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
@@ -65,6 +83,43 @@ interface UsagePageProps {
   teams: Team[];
   organizations: Organization[];
 }
+
+const DailyUsageTooltip = ({ active, payload, label }: ChartTooltipProps) => {
+  if (!active || !payload?.[0]) return null;
+  const data = payload[0].payload as { date?: string; metrics: DailyData["metrics"] };
+  return (
+    <div className="bg-white p-4 shadow-lg rounded-lg border">
+      <p className="font-bold">{label == null ? data.date : String(label)}</p>
+      {TOKEN_LINE_DIMENSIONS.map((dimension) => (
+        <p key={dimension.key} style={{ color: `var(--color-${dimension.color}-600)` }}>
+          {dimension.label}: {formatTokenLineValue(dimension, dimension.getValue(data.metrics))}
+        </p>
+      ))}
+    </div>
+  );
+};
+
+const ModelSpendTooltip = ({ active, payload }: ChartTooltipProps) => {
+  if (!active || !payload?.[0]) return null;
+  const data = payload[0].payload as {
+    key: string;
+    spend: number;
+    requests: number;
+    successful_requests: number;
+    failed_requests: number;
+    tokens: number;
+  };
+  return (
+    <div className="bg-white p-4 shadow-lg rounded-lg border">
+      <p className="font-bold">{data.key}</p>
+      <p className="text-cyan-500">Spend: ${formatNumberWithCommas(data.spend, 2)}</p>
+      <p className="text-gray-600">Total Requests: {data.requests.toLocaleString()}</p>
+      <p className="text-green-600">Successful: {data.successful_requests.toLocaleString()}</p>
+      <p className="text-red-600">Failed: {data.failed_requests.toLocaleString()}</p>
+      <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
+    </div>
+  );
+};
 
 const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
@@ -153,6 +208,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
+  const [dailyChartView, setDailyChartView] = useState<"bar" | "line">("bar");
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -439,6 +495,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => [...userSpendData.results].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()),
     [userSpendData.results],
   );
+  const dailyChartData = useMemo(
+    () =>
+      sortedDailyResults.map((day) => ({
+        ...day,
+        ...Object.fromEntries(
+          TOKEN_LINE_DIMENSIONS.map((dimension) => [dimension.key, dimension.getValue(day.metrics)]),
+        ),
+      })),
+    [sortedDailyResults],
+  );
+  const dailyLineChartConfig = useMemo<ChartConfig>(
+    () => Object.fromEntries(TOKEN_LINE_DIMENSIONS.map((dimension) => [dimension.key, { label: dimension.label }])),
+    [],
+  );
   const modelMetrics = useMemo(
     () => processActivityData(userSpendData, modelViewType === "groups" ? "model_groups" : "models", teams),
     [userSpendData, modelViewType, teams],
@@ -694,38 +764,115 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Col numColSpan={2}>
                         <ShadcnCard>
                           <CardHeader>
-                            <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <CardTitle className="text-base font-semibold">Daily Spend</CardTitle>
+                              <Segmented
+                                size="small"
+                                options={[
+                                  { label: "Bar", value: "bar" },
+                                  { label: "Line", value: "line" },
+                                ]}
+                                value={dailyChartView}
+                                onChange={(value) => setDailyChartView(value as "bar" | "line")}
+                              />
+                            </div>
                           </CardHeader>
                           <CardContent>
-                            {loading ? (
-                              <ChartLoader isDateChanging={isDateChanging} />
-                            ) : (
-                              <BarChart
-                                data={sortedDailyResults}
-                                index="date"
-                                categories={["metrics.spend"]}
-                                colors={["cyan"]}
-                                valueFormatter={valueFormatterSpend}
-                                yAxisWidth={100}
-                                showLegend={false}
-                                customTooltip={({ payload, active }) => {
-                                  if (!active || !payload?.[0]) return null;
-                                  const data = payload[0].payload;
-                                  return (
-                                    <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                      <p className="font-bold">{data.date}</p>
-                                      <p className="text-cyan-500">
-                                        Spend: ${formatNumberWithCommas(data.metrics.spend, 2)}
-                                      </p>
-                                      <p className="text-gray-600">Requests: {data.metrics.api_requests}</p>
-                                      <p className="text-gray-600">Successful: {data.metrics.successful_requests}</p>
-                                      <p className="text-gray-600">Failed: {data.metrics.failed_requests}</p>
-                                      <p className="text-gray-600">Tokens: {data.metrics.total_tokens}</p>
-                                    </div>
-                                  );
-                                }}
-                              />
-                            )}
+                            {(() => {
+                              if (loading) {
+                                return <ChartLoader isDateChanging={isDateChanging} />;
+                              }
+                              if (dailyChartView === "bar") {
+                                return (
+                                  <BarChart
+                                    data={sortedDailyResults}
+                                    index="date"
+                                    categories={["metrics.spend"]}
+                                    colors={["cyan"]}
+                                    valueFormatter={valueFormatterSpend}
+                                    yAxisWidth={100}
+                                    showLegend={false}
+                                    customTooltip={DailyUsageTooltip}
+                                  />
+                                );
+                              }
+                              return (
+                                <ChartContainer
+                                  config={dailyLineChartConfig}
+                                  className="h-96 w-full"
+                                  data-testid="daily-usage-line-chart"
+                                >
+                                  <ComposedChart data={dailyChartData} margin={{ bottom: 20 }}>
+                                    <CartesianGrid vertical={false} />
+                                    <XAxis
+                                      dataKey="date"
+                                      tickLine={false}
+                                      axisLine={false}
+                                      minTickGap={5}
+                                      interval="equidistantPreserveStart"
+                                    />
+                                    <YAxis
+                                      yAxisId="count"
+                                      width={80}
+                                      tickLine={false}
+                                      axisLine={false}
+                                      tickFormatter={(value) => formatNumberWithCommas(value, 0)}
+                                    />
+                                    <YAxis
+                                      yAxisId="rate"
+                                      orientation="right"
+                                      width={48}
+                                      tickLine={false}
+                                      axisLine={false}
+                                      tickFormatter={(value) => `${value}%`}
+                                      domain={[0, 100]}
+                                    />
+                                    <YAxis yAxisId="spend" hide tickFormatter={valueFormatterSpend} />
+                                    <RechartsTooltip content={DailyUsageTooltip} />
+                                    <RechartsLegend verticalAlign="bottom" align="center" />
+                                    {SPEND_DIMENSIONS.map((dimension) => (
+                                      <Line
+                                        key={dimension.key}
+                                        yAxisId="spend"
+                                        type="linear"
+                                        dataKey={dimension.key}
+                                        name={dimension.label}
+                                        stroke={chartColorValue(dimension.color)}
+                                        strokeWidth={2}
+                                        dot={false}
+                                        isAnimationActive={false}
+                                      />
+                                    ))}
+                                    {TOKEN_COUNT_DIMENSIONS.map((dimension) => (
+                                      <Line
+                                        key={dimension.key}
+                                        yAxisId="count"
+                                        type="linear"
+                                        dataKey={dimension.key}
+                                        name={dimension.label}
+                                        stroke={chartColorValue(dimension.color)}
+                                        strokeWidth={2}
+                                        dot={false}
+                                        isAnimationActive={false}
+                                      />
+                                    ))}
+                                    {RATE_DIMENSIONS.map((dimension) => (
+                                      <Line
+                                        key={dimension.key}
+                                        yAxisId="rate"
+                                        type="linear"
+                                        dataKey={dimension.key}
+                                        name={dimension.label}
+                                        stroke={chartColorValue(dimension.color)}
+                                        strokeWidth={2}
+                                        dot={false}
+                                        isAnimationActive={false}
+                                      />
+                                    ))}
+                                  </ComposedChart>
+                                </ChartContainer>
+                              );
+                            })()}
                           </CardContent>
                         </ShadcnCard>
                       </Col>
@@ -777,28 +924,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                                     layout="vertical"
                                     yAxisWidth={200}
                                     showLegend={false}
-                                    customTooltip={({ payload, active }) => {
-                                      if (!active || !payload?.[0]) return null;
-                                      const data = payload[0].payload;
-                                      return (
-                                        <div className="bg-white p-4 shadow-lg rounded-lg border">
-                                          <p className="font-bold">{data.key}</p>
-                                          <p className="text-cyan-500">
-                                            Spend: ${formatNumberWithCommas(data.spend, 2)}
-                                          </p>
-                                          <p className="text-gray-600">
-                                            Total Requests: {data.requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-green-600">
-                                            Successful: {data.successful_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-red-600">
-                                            Failed: {data.failed_requests.toLocaleString()}
-                                          </p>
-                                          <p className="text-gray-600">Tokens: {data.tokens.toLocaleString()}</p>
-                                        </div>
-                                      );
-                                    }}
+                                    customTooltip={ModelSpendTooltip}
                                   />
                                 );
                               })()}
