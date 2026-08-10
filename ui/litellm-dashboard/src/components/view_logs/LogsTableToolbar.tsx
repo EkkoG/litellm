@@ -1,7 +1,7 @@
 "use client";
 
 import moment from "moment";
-import { CalendarDays } from "lucide-react";
+import { CalendarDays, Download } from "lucide-react";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -25,6 +25,10 @@ interface LogsTableToolbarProps {
   onIsLiveTailChange: (value: boolean) => void;
   onResetToFirstPage: () => void;
   onResetFilters: () => void;
+  onExport?: () => void;
+  isExporting?: boolean;
+  exportDisabled?: boolean;
+  exportLabel?: string;
 }
 
 export function LogsTableToolbar({
@@ -40,6 +44,10 @@ export function LogsTableToolbar({
   onIsLiveTailChange,
   onResetToFirstPage,
   onResetFilters,
+  onExport,
+  isExporting = false,
+  exportDisabled = false,
+  exportLabel = "Export JSON",
 }: LogsTableToolbarProps) {
   const [quickSelectOpen, setQuickSelectOpen] = useState(false);
 
@@ -128,6 +136,13 @@ export function LogsTableToolbar({
       <Button variant="outline" size="sm" onClick={onResetFilters}>
         Reset Filters
       </Button>
+
+      {onExport && (
+        <Button variant="outline" size="sm" onClick={onExport} disabled={exportDisabled || isExporting}>
+          <Download className="size-4" />
+          {isExporting ? "Exporting…" : exportLabel}
+        </Button>
+      )}
     </div>
   );
 }

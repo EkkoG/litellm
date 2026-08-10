@@ -26,6 +26,7 @@ export type LogEntry = {
   startTime: string;
   endTime: string;
   user?: string;
+  user_alias?: string;
   end_user?: string;
   custom_llm_provider?: string;
   metadata?: Record<string, any>;
@@ -47,4 +48,9 @@ export type LogEntry = {
   session_llm_count?: number;
   session_mcp_count?: number;
   session_agent_count?: number;
+};
+
+export const formatUserDisplay = (userId: string | undefined, userAlias: string | null | undefined): string => {
+  if (!userId) return "-";
+  return userAlias ? `${userAlias} (${userId})` : userId;
 };

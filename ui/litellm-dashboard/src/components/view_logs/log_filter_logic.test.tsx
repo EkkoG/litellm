@@ -130,6 +130,13 @@ describe("useLogFilterLogic", () => {
       expect(call?.params).toMatchObject({ sort_by: "spend", sort_order: "asc" });
     });
 
+    it("sends the selected request or session view", async () => {
+      renderFilterHook({ viewMode: "session" });
+
+      await waitFor(() => expect(uiSpendLogsCall).toHaveBeenCalled());
+      expect(lastCallParams()?.params).toMatchObject({ view: "session" });
+    });
+
     it("falls back to the default sort when the sorting state is empty", async () => {
       renderFilterHook({ sorting: [] });
 

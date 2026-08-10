@@ -8,7 +8,9 @@ import { getSpendString } from "@/utils/dataUtils";
 
 import { getProviderLogoAndName } from "../provider_info_helpers";
 import type { LogEntry } from "./columns";
+import { formatUserDisplay } from "./columns";
 import { AGENT_CALL_TYPES, MCP_CALL_TYPES } from "./constants";
+import { getPromptCacheReadTokens } from "./logs_utils";
 import { AgentBadge, AgentIcon, LlmBadge, McpBadge, SparkleIcon, WrenchIcon } from "./TypeBadges";
 
 export interface RequestLogsTableColumnsDeps {
@@ -261,12 +263,33 @@ export const getRequestLogsTableColumns = ({
     },
   },
   {
+    id: "prompt_cache",
+    header: "Prompt Cache",
+    size: 150,
+    enableSorting: false,
+    meta: { numeric: true },
+    cell: ({ row }) => {
+      const cacheReadTokens = getPromptCacheReadTokens(row.original.metadata);
+      if (cacheReadTokens === undefined || row.original.prompt_tokens <= 0) return <span>-</span>;
+
+      const hitRate = (cacheReadTokens / row.original.prompt_tokens) * 100;
+      return (
+        <div className="flex flex-col items-end">
+          <span>{hitRate.toFixed(1)}%</span>
+          <span className="text-[10px] text-gray-400">
+            {cacheReadTokens.toLocaleString()} / {row.original.prompt_tokens.toLocaleString()}
+          </span>
+        </div>
+      );
+    },
+  },
+  {
     id: "user",
     accessorKey: "user",
     header: "Internal User",
     size: 150,
     enableSorting: false,
-    cell: ({ row }) => <TruncatedText value={row.original.user} />,
+    cell: ({ row }) => <TruncatedText value={formatUserDisplay(row.original.user, row.original.user_alias)} />,
   },
   {
     id: "end_user",

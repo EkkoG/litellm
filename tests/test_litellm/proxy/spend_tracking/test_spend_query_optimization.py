@@ -220,6 +220,82 @@ def _make_ui_spend_logs_mock(count_total, page_rows):
 
 
 @pytest.mark.asyncio
+async def test_spend_logs_ui_session_view_uses_aggregate_rows(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import ui_view_spend_logs
+
+    page_rows = [
+        {
+            "group_id": "session:sess-1",
+            "row_type": "session",
+            "session_id": "sess-1",
+            "request_count": 3,
+            "session_spend": 0.06,
+        }
+    ]
+    mock_prisma = _make_ui_spend_logs_mock(count_total=1, page_rows=page_rows)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    mock_request = MagicMock()
+    mock_request.url.path = "/spend/logs/ui"
+
+    response = await ui_view_spend_logs(
+        request=mock_request,
+        start_date="2026-02-16 00:00:00",
+        end_date="2026-02-16 23:59:59",
+        page=1,
+        page_size=50,
+        view="session",
+        sort_by="spend",
+        sort_order="desc",
+        user_api_key_dict=auth,
+    )
+
+    count_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
+    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
+    assert "GROUP BY CASE WHEN session_id" in count_sql
+    assert "COUNT(*)::int AS request_count" in page_sql
+    assert "SUM(spend)" in page_sql
+    assert "session_cache_read_tokens" in page_sql
+    assert "DISTINCT ON" not in page_sql
+    assert mock_prisma.db.query_raw.call_count == 2
+    assert response["data"] == page_rows
+
+
+@pytest.mark.asyncio
+async def test_spend_logs_ui_request_view_keeps_request_pagination(monkeypatch):
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.spend_tracking.spend_management_endpoints import ui_view_spend_logs
+
+    page_rows = [{"request_id": "req-1", "metadata": "{}", "session_id": "sess-1"}]
+    mock_prisma = _make_ui_spend_logs_mock(count_total=1, page_rows=page_rows)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    auth = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin")
+    mock_request = MagicMock()
+    mock_request.url.path = "/spend/logs/ui"
+
+    response = await ui_view_spend_logs(
+        request=mock_request,
+        start_date="2026-02-16 00:00:00",
+        end_date="2026-02-16 23:59:59",
+        page=1,
+        page_size=50,
+        view="request",
+        sort_by="startTime",
+        sort_order="desc",
+        user_api_key_dict=auth,
+    )
+
+    count_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
+    page_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
+    assert "GROUP BY CASE WHEN session_id" not in count_sql
+    assert "COUNT(*)::int AS request_count" not in page_sql
+    assert "DISTINCT ON" not in page_sql
+    assert mock_prisma.db.query_raw.call_count == 2
+    assert response["data"] == page_rows
+
+
+@pytest.mark.asyncio
 async def test_spend_logs_ui_uses_bounded_count_not_full_scan(monkeypatch):
     """
     /spend/logs/ui must compute its pagination total with a bounded

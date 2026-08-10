@@ -6,9 +6,13 @@ import { Team } from "../key_team_helpers/key_list";
 import { fetchAllTeams } from "../../components/key_team_helpers/filter_helpers";
 import { defaultPageSize } from "../constants";
 import { LOGS_SORT_FIELD_MAP, type LogEntry, type LogsSortField } from "./columns";
+import type { SessionLogEntry } from "./SessionLogsTableColumns";
 
-export interface PaginatedResponse {
-  data: LogEntry[];
+export type LogsViewMode = "session" | "request";
+export type LogsPageRow = LogEntry | SessionLogEntry;
+
+export interface PaginatedResponse<T = LogEntry> {
+  data: T[];
   total: number;
   page: number;
   page_size: number;
@@ -91,7 +95,7 @@ export const getFilterValue = (columnFilters: ColumnFiltersState, columnId: stri
   return trimmed === "" ? undefined : trimmed;
 };
 
-export function useLogFilterLogic({
+export function useLogFilterLogic<T extends LogsPageRow = LogEntry>({
   accessToken,
   token,
   userRole,
@@ -105,6 +109,7 @@ export function useLogFilterLogic({
   pagination,
   isCustomDate,
   sorting,
+  viewMode = "request",
 }: {
   accessToken: string | null;
   token: string | null;
@@ -119,13 +124,14 @@ export function useLogFilterLogic({
   pagination: PaginationState;
   isCustomDate: boolean;
   sorting: SortingState;
+  viewMode?: LogsViewMode;
 }) {
   const pageSize = pagination.pageSize || defaultPageSize;
   const activeSort = sorting[0] ?? DEFAULT_LOGS_SORTING[0];
   const sortBy: LogsSortField = isSortField(activeSort.id) ? activeSort.id : "startTime";
   const sortOrder: "asc" | "desc" = activeSort.desc ? "desc" : "asc";
 
-  const logsQueryOptions: UseQueryOptions<PaginatedResponse> = {
+  const logsQueryOptions: UseQueryOptions<PaginatedResponse<T>> = {
     queryKey: [
       "logs",
       "table",
@@ -138,6 +144,7 @@ export function useLogFilterLogic({
       filterByCurrentUser ? userID : null,
       sortBy,
       sortOrder,
+      viewMode,
     ],
     queryFn: async () => {
       if (!accessToken || !token || !userRole || !userID) {
@@ -154,13 +161,14 @@ export function useLogFilterLogic({
 
       const userIdFilter = getFilterValue(columnFilters, LOG_FILTER_IDS.USER_ID);
 
-      return await uiSpendLogsCall({
+      return (await uiSpendLogsCall({
         accessToken,
         start_date: window.start_date,
         end_date: window.end_date,
         page: pagination.pageIndex + 1,
         page_size: pageSize,
         params: {
+          view: viewMode,
           api_key: getFilterValue(columnFilters, LOG_FILTER_IDS.KEY_HASH),
           team_id: getFilterValue(columnFilters, LOG_FILTER_IDS.TEAM_ID),
           request_id: getFilterValue(columnFilters, LOG_FILTER_IDS.REQUEST_ID),
@@ -176,7 +184,7 @@ export function useLogFilterLogic({
           sort_by: sortBy,
           sort_order: sortOrder,
         },
-      });
+      })) as PaginatedResponse<T>;
     },
     enabled: !!accessToken && !!token && !!userRole && !!userID && activeTab === "request logs",
     refetchInterval: getLiveTailRefetchInterval(isLiveTail, pagination.pageIndex),
@@ -186,7 +194,7 @@ export function useLogFilterLogic({
 
   const logsQuery = useQuery(logsQueryOptions);
 
-  const filteredLogs: PaginatedResponse = logsQuery.data ?? {
+  const filteredLogs: PaginatedResponse<T> = logsQuery.data ?? {
     data: [],
     total: 0,
     page: 1,

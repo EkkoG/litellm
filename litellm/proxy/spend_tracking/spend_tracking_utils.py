@@ -3,6 +3,7 @@ import json
 import os
 import re
 import secrets
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from datetime import datetime as dt
 from typing import Any, Literal, cast
@@ -38,6 +39,8 @@ from litellm.types.utils import (
     VectorStoreSearchResponse,
 )
 from litellm.utils import get_end_user_id_for_cost_tracking
+
+_CLIENT_SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9_-]{8,}$")
 
 
 def _get_max_string_length_prompt_in_db() -> int:
@@ -485,6 +488,10 @@ def _get_session_id_for_spend_log(
     """
     from litellm._uuid import uuid
 
+    request_session_id = _get_request_session_id_for_spend_log(kwargs)
+    if request_session_id is not None:
+        return request_session_id
+
     if standard_logging_payload is not None and standard_logging_payload.get("trace_id") is not None:
         return str(standard_logging_payload.get("trace_id"))
 
@@ -494,6 +501,32 @@ def _get_session_id_for_spend_log(
 
     # Ensure we always have a session id, if none is provided
     return str(uuid.uuid4())
+
+
+def _get_request_session_id_for_spend_log(kwargs: Mapping[str, object]) -> str | None:
+    litellm_params = kwargs.get("litellm_params")
+    if not isinstance(litellm_params, dict):
+        return None
+    proxy_server_request = litellm_params.get("proxy_server_request")
+    if not isinstance(proxy_server_request, dict):
+        return None
+    headers = proxy_server_request.get("headers")
+    if not isinstance(headers, dict):
+        return None
+    normalized = {str(key).lower(): value for key, value in headers.items()}
+    explicit_id = normalized.get("x-litellm-trace-id") or normalized.get("x-litellm-session-id")
+    if isinstance(explicit_id, str) and explicit_id:
+        return explicit_id
+    session_id = normalized.get("session-id") or normalized.get("session_id")
+    thread_id = normalized.get("thread-id") or normalized.get("thread_id")
+    if (
+        isinstance(session_id, str)
+        and isinstance(thread_id, str)
+        and _CLIENT_SESSION_ID_RE.fullmatch(session_id)
+        and _CLIENT_SESSION_ID_RE.fullmatch(thread_id)
+    ):
+        return session_id
+    return None
 
 
 def _get_request_duration_ms(start_time: datetime, end_time: datetime) -> int | None:

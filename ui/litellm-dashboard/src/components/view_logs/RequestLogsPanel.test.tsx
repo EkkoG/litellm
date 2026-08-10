@@ -6,6 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import type { LogEntry } from "./columns";
 import RequestLogsPanel from "./RequestLogsPanel";
+import type { SessionLogEntry } from "./SessionLogsTableColumns";
 
 vi.mock("../networking", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../networking")>();
@@ -112,7 +113,7 @@ const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
   ...overrides,
 });
 
-const respondWith = (data: LogEntry[]) =>
+const respondWith = (data: (LogEntry | SessionLogEntry)[]) =>
   vi.mocked(uiSpendLogsCall).mockResolvedValue({
     data,
     total: data.length,
@@ -137,52 +138,80 @@ describe("RequestLogsPanel", () => {
     vi.clearAllMocks();
     sessionStorage.clear();
     testQueryClient.clear();
-    window.history.replaceState(null, "", "/logs/");
+    window.history.replaceState(null, "", "/logs/?view=request");
     respondWith([]);
   });
 
-  describe("multi-call session collapsing", () => {
+  describe("request and session views", () => {
     const sessionRows = [
       logEntry({ request_id: "req-mcp", call_type: "call_mcp_tool", session_id: "sess-1", session_total_count: 3 }),
       logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
       logEntry({ request_id: "req-llm-2", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
     ];
 
-    it("collapses a multi-call session to a single representative row", async () => {
+    it("shows every request in request view", async () => {
       respondWith(sessionRows);
       renderWithProviders(<RequestLogsPanel {...defaultProps} />);
 
-      await waitFor(() => expect(row("req-mcp") ?? row("req-llm") ?? row("req-llm-2")).not.toBeNull());
-
-      const rendered = ["req-mcp", "req-llm", "req-llm-2"].filter((id) => row(id) !== null);
-      expect(rendered).toHaveLength(1);
+      await waitFor(() => expect(row("req-mcp")).not.toBeNull());
+      expect(row("req-llm")).not.toBeNull();
+      expect(row("req-llm-2")).not.toBeNull();
+      expect(lastCall()?.params?.view).toBe("request");
     });
 
-    it("prefers an LLM call over an MCP call as the session's representative", async () => {
-      respondWith(sessionRows);
+    it("requests aggregate rows after switching to Sessions", async () => {
+      const user = userEvent.setup();
+      vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) => ({
+        data:
+          params?.view === "session"
+            ? [
+                {
+                  row_type: "session",
+                  group_id: "session:sess-1",
+                  session_id: "sess-1",
+                  request_id: null,
+                  session_start_time: "2026-07-07T09:50:13Z",
+                  session_end_time: "2026-07-07T09:50:14Z",
+                  last_active: "2026-07-07T09:50:13Z",
+                  request_count: 3,
+                  session_spend: 0.03,
+                  session_duration_ms: 1000,
+                  session_total_tokens: 30,
+                  session_prompt_tokens: 15,
+                  session_completion_tokens: 15,
+                  session_cache_read_tokens: 10,
+                  success_count: 3,
+                  failure_count: 0,
+                  llm_count: 2,
+                  agent_count: 0,
+                  mcp_count: 1,
+                  models: ["gpt-4o"],
+                  providers: ["openai"],
+                  team_ids: ["team-1"],
+                  api_keys: ["key-1"],
+                  users: ["user-1"],
+                  user_aliases: [{ user_id: "user-1", user_alias: "Alice" }],
+                  end_users: null,
+                  team_names: ["Team One"],
+                  key_aliases: ["Key One"],
+                  primary_model: "gpt-4o",
+                  call_type: "acompletion",
+                  model_id: "model-1",
+                  api_base: null,
+                },
+              ]
+            : sessionRows,
+        total: 1,
+        page: 1,
+        page_size: 50,
+        total_pages: 1,
+      }));
       renderWithProviders(<RequestLogsPanel {...defaultProps} />);
 
-      await waitFor(() => expect(row("req-llm")).not.toBeNull());
-      expect(row("req-mcp")).toBeNull();
-    });
+      await user.click(screen.getByRole("tab", { name: "Sessions" }));
 
-    it("shows the session's call count and composition on the representative row", async () => {
-      respondWith(sessionRows);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
-
-      await waitFor(() => expect(row("req-llm")).not.toBeNull());
-      expect(within(row("req-llm") as HTMLElement).getByText("3")).toBeInTheDocument();
-    });
-
-    it("leaves single-call rows untouched", async () => {
-      respondWith([
-        logEntry({ request_id: "req-solo-a", session_id: "sess-a", session_total_count: 1 }),
-        logEntry({ request_id: "req-solo-b" }),
-      ]);
-      renderWithProviders(<RequestLogsPanel {...defaultProps} />);
-
-      await waitFor(() => expect(row("req-solo-a")).not.toBeNull());
-      expect(row("req-solo-b")).not.toBeNull();
+      await waitFor(() => expect(document.querySelector('[data-row-id="session:sess-1"]')).not.toBeNull());
+      expect(lastCall()?.params?.view).toBe("session");
     });
   });
 
@@ -269,7 +298,7 @@ describe("RequestLogsPanel", () => {
     });
 
     it("opens the drawer on load when ?log_id= matches a log in the loaded page", async () => {
-      window.history.replaceState(null, "", "/logs/?log_id=req-2");
+      window.history.replaceState(null, "", "/logs/?view=request&log_id=req-2");
       respondWith([logEntry({ request_id: "req-1" }), logEntry({ request_id: "req-2" })]);
       renderWithProviders(<RequestLogsPanel {...defaultProps} />);
 
@@ -280,7 +309,7 @@ describe("RequestLogsPanel", () => {
     });
 
     it("fetches the log by request_id and opens the drawer when it is not in the loaded page", async () => {
-      window.history.replaceState(null, "", "/logs/?log_id=req-old");
+      window.history.replaceState(null, "", "/logs/?view=request&log_id=req-old");
       vi.mocked(uiSpendLogsCall).mockImplementation(async ({ params }) =>
         params?.request_id === "req-old"
           ? { data: [logEntry({ request_id: "req-old" })], total: 1, page: 1, page_size: 1, total_pages: 1 }
@@ -391,7 +420,7 @@ describe("RequestLogsPanel", () => {
     });
 
     it("opens a deep-linked multi-call session log in session mode", async () => {
-      window.history.replaceState(null, "", "/logs/?log_id=req-llm");
+      window.history.replaceState(null, "", "/logs/?view=request&log_id=req-llm");
       respondWith([
         logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
       ]);
@@ -404,7 +433,7 @@ describe("RequestLogsPanel", () => {
       });
     });
 
-    it("clicking a multi-call session's row writes ?session_id= alongside ?log_id=", async () => {
+    it("clicking a request row opens that request even when it belongs to a multi-call session", async () => {
       const user = userEvent.setup();
       respondWith([
         logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
@@ -416,14 +445,14 @@ describe("RequestLogsPanel", () => {
       await user.click(row("req-llm") as HTMLElement);
 
       const params = new URLSearchParams(window.location.search);
-      expect(params.get("session_id")).toBe("sess-1");
+      expect(params.get("session_id")).toBeNull();
       expect(params.get("log_id")).toBe("req-llm");
-      await waitFor(() => expect(drawer()).toHaveAttribute("data-session-id", "sess-1"));
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-log-id", "req-llm"));
     });
 
     it("selecting another log while a session view is open keeps the session open", async () => {
       const user = userEvent.setup();
-      window.history.replaceState(null, "", "/logs/?log_id=req-llm");
+      window.history.replaceState(null, "", "/logs/?view=request&log_id=req-llm");
       respondWith([
         logEntry({ request_id: "req-llm", call_type: "acompletion", session_id: "sess-1", session_total_count: 3 }),
         logEntry({ request_id: "req-unenriched" }),

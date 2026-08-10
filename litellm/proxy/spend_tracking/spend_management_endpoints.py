@@ -33,6 +33,7 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
 from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.repositories.table_repositories import SpendLogsRepository
 from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
@@ -147,6 +148,16 @@ class _SessionSpendRow(TypedDict):
     mcp_tool_call_spend: float
 
 
+class _UserAlias(NamedTuple):
+    user_id: str
+    user_alias: str
+
+
+class _UserAliasDisplay(NamedTuple):
+    user_id: str
+    user_alias: str | None
+
+
 async def _query_raw(prisma_client: PrismaClient, sql_query: str, *args: object) -> Sequence[_RowT]:
     """Run a raw read query and return its rows as the row type the caller declares."""
     return await prisma_client.db.query_raw(sql_query, *args)
@@ -185,6 +196,15 @@ class _TeamTable(Protocol):
     async def update_many(self, *, data: Mapping[str, float], where: Mapping[str, object]) -> int: ...
 
 
+class _UserAliasRow(Protocol):
+    user_id: str | None
+    user_alias: str | None
+
+
+class _UserTable(Protocol):
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_UserAliasRow]: ...
+
+
 class _VerificationTokenTable(Protocol):
     """The subset of the Prisma verification token table API this module uses."""
 
@@ -197,6 +217,10 @@ def _spend_logs_table(prisma_client: PrismaClient) -> _SpendLogsTable:
 
 def _team_table(prisma_client: PrismaClient) -> _TeamTable:
     return TeamRepository(prisma_client).table
+
+
+def _user_table(prisma_client: PrismaClient) -> _UserTable:
+    return UserRepository(prisma_client).table
 
 
 def _verification_token_table(prisma_client: PrismaClient) -> _VerificationTokenTable:
@@ -1864,6 +1888,7 @@ async def ui_view_spend_logs(
     ),
     page: int = fastapi.Query(default=1, description="Page number for pagination", ge=1),
     page_size: int = fastapi.Query(default=50, description="Number of items per page", ge=1, le=1000),
+    view: Literal["session", "request"] | None = fastapi.Query(default=None, include_in_schema=False),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     status_filter: str | None = fastapi.Query(
         default=None, description="Filter logs by status (e.g., success, failure)"
@@ -1915,6 +1940,9 @@ async def ui_view_spend_logs(
     from litellm.proxy.auth.auth_utils import get_request_route  # noqa: PLC0415
 
     is_v2 = "/spend/logs/v2" in get_request_route(request)
+    resolved_view = view if isinstance(view, str) else None
+    is_session_view = not is_v2 and resolved_view == "session"
+    is_legacy_session_view = not is_v2 and resolved_view is None
 
     # Validate sort_by and sort_order
     valid_sort_fields = {
@@ -2208,12 +2236,18 @@ async def ui_view_spend_logs(
         else:
             _order_expr = order_column
 
+        session_group_expr = (
+            "CASE WHEN session_id IS NULL OR session_id = '' "
+            "THEN 'request:' || request_id ELSE 'session:' || session_id END"
+        )
+        count_group_clause = f"GROUP BY {session_group_expr}" if is_session_view or is_legacy_session_view else ""
         count_query = f"""
             SELECT COUNT(*) AS total_count
             FROM (
                 SELECT 1
                 FROM "LiteLLM_SpendLogs"
                 WHERE {" AND ".join(sql_conditions)}
+                {count_group_clause}
                 LIMIT ${p}
             ) AS bounded_matches
         """
@@ -2224,8 +2258,7 @@ async def ui_view_spend_logs(
         total_is_capped = raw_total > SPEND_LOGS_PAGINATION_COUNT_CAP
         total_records = SPEND_LOGS_PAGINATION_COUNT_CAP if total_is_capped else raw_total
 
-        sql_query = f"""
-            SELECT
+        request_columns = """
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
                 "completionStartTime", model, model_id, model_group,
@@ -2234,11 +2267,118 @@ async def ui_view_spend_logs(
                 organization_id, end_user, requester_ip_address,
                 session_id, status, mcp_namespaced_tool_name, agent_id,
                 COALESCE(request_duration_ms, (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER) AS request_duration_ms
-            FROM "LiteLLM_SpendLogs"
-            WHERE {" AND ".join(sql_conditions)}
-            ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
-            LIMIT ${p} OFFSET ${p + 1}
         """
+        if is_legacy_session_view:
+            sql_query = f"""
+                SELECT {request_columns}
+                FROM (
+                    SELECT DISTINCT ON ({session_group_expr}) {request_columns}
+                    FROM "LiteLLM_SpendLogs"
+                    WHERE {" AND ".join(sql_conditions)}
+                    ORDER BY {session_group_expr},
+                             {_order_expr} {_sql_dir}{_nulls_clause},
+                             "startTime" {_sql_dir}, request_id {_sql_dir}
+                ) AS grouped_sessions
+                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause},
+                         "startTime" {_sql_dir}, request_id {_sql_dir}
+                LIMIT ${p} OFFSET ${p + 1}
+            """
+        elif not is_session_view:
+            sql_query = f"""
+                SELECT {request_columns}
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                ORDER BY {_order_expr} {_sql_dir}{_nulls_clause}
+                LIMIT ${p} OFFSET ${p + 1}
+            """
+        else:
+            cache_read_tokens_expr = """
+                CASE
+                    WHEN metadata->'additional_usage_values'->>'cache_read_input_tokens' ~ '^[0-9]+(\\.[0-9]+)?$'
+                    THEN (metadata->'additional_usage_values'->>'cache_read_input_tokens')::double precision
+                    WHEN metadata->'additional_usage_values'->'prompt_tokens_details'->>'cached_tokens'
+                         ~ '^[0-9]+(\\.[0-9]+)?$'
+                    THEN (metadata->'additional_usage_values'->'prompt_tokens_details'->>'cached_tokens')::double precision
+                    ELSE 0
+                END
+            """
+            match order_column:
+                case "startTime":
+                    session_order_expr = 'MAX("startTime")'
+                case "endTime":
+                    session_order_expr = 'MAX("endTime")'
+                case "spend":
+                    session_order_expr = "COALESCE(SUM(spend), 0)"
+                case "total_tokens":
+                    session_order_expr = "COALESCE(SUM(total_tokens), 0)"
+                case "request_duration_ms":
+                    session_order_expr = 'EXTRACT(EPOCH FROM (MAX("endTime") - MIN("startTime"))) * 1000'
+                case "model":
+                    session_order_expr = "MIN(model)"
+                case "ttft_ms":
+                    session_order_expr = (
+                        'MIN(CASE WHEN "completionStartTime" IS NULL OR "completionStartTime" = "endTime" '
+                        'THEN NULL ELSE EXTRACT(EPOCH FROM ("completionStartTime" - "startTime")) * 1000 END)'
+                    )
+                case _:
+                    raise AssertionError(f"Unexpected session sort field: {order_column}")
+            session_nulls_clause = " NULLS LAST" if order_column in ("model", "ttft_ms") else ""
+            sql_query = f"""
+                SELECT
+                    {session_group_expr} AS group_id,
+                    CASE WHEN MAX(NULLIF(session_id, '')) IS NULL THEN 'request' ELSE 'session' END AS row_type,
+                    MAX(NULLIF(session_id, '')) AS session_id,
+                    CASE WHEN MAX(NULLIF(session_id, '')) IS NULL THEN MAX(request_id) ELSE NULL END AS request_id,
+                    MIN("startTime") AS session_start_time,
+                    MAX("endTime") AS session_end_time,
+                    MAX("startTime") AS last_active,
+                    COUNT(*)::int AS request_count,
+                    COUNT(*)::int AS session_total_count,
+                    COALESCE(SUM(spend), 0)::double precision AS session_spend,
+                    COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
+                    (EXTRACT(EPOCH FROM (MAX("endTime") - MIN("startTime"))) * 1000)::double precision
+                        AS session_duration_ms,
+                    COALESCE(SUM(total_tokens), 0)::bigint AS session_total_tokens,
+                    COALESCE(SUM(prompt_tokens), 0)::bigint AS session_prompt_tokens,
+                    COALESCE(SUM(completion_tokens), 0)::bigint AS session_completion_tokens,
+                    COALESCE(SUM({cache_read_tokens_expr}), 0)::double precision AS session_cache_read_tokens,
+                    COUNT(*) FILTER (
+                        WHERE status = 'failure' OR metadata->>'status' = 'failure'
+                    )::int AS failure_count,
+                    COUNT(*) FILTER (
+                        WHERE COALESCE(status, 'success') <> 'failure'
+                          AND COALESCE(metadata->>'status', 'success') <> 'failure'
+                    )::int AS success_count,
+                    COUNT(*) FILTER (
+                        WHERE call_type IN ('call_mcp_tool', 'list_mcp_tools')
+                    )::int AS mcp_count,
+                    COUNT(*) FILTER (WHERE call_type = 'asend_message')::int AS agent_count,
+                    COUNT(*) FILTER (
+                        WHERE call_type NOT IN ('call_mcp_tool', 'list_mcp_tools', 'asend_message')
+                    )::int AS llm_count,
+                    ARRAY_AGG(DISTINCT NULLIF(model, '')) FILTER (WHERE NULLIF(model, '') IS NOT NULL) AS models,
+                    ARRAY_AGG(DISTINCT NULLIF(custom_llm_provider, ''))
+                        FILTER (WHERE NULLIF(custom_llm_provider, '') IS NOT NULL) AS providers,
+                    ARRAY_AGG(DISTINCT NULLIF(team_id, '')) FILTER (WHERE NULLIF(team_id, '') IS NOT NULL) AS team_ids,
+                    ARRAY_AGG(DISTINCT NULLIF(api_key, '')) FILTER (WHERE NULLIF(api_key, '') IS NOT NULL) AS api_keys,
+                    ARRAY_AGG(DISTINCT NULLIF("user", '')) FILTER (WHERE NULLIF("user", '') IS NOT NULL) AS users,
+                    ARRAY_AGG(DISTINCT NULLIF(end_user, '')) FILTER (WHERE NULLIF(end_user, '') IS NOT NULL) AS end_users,
+                    ARRAY_AGG(DISTINCT NULLIF(metadata->>'user_api_key_team_alias', ''))
+                        FILTER (WHERE NULLIF(metadata->>'user_api_key_team_alias', '') IS NOT NULL) AS team_names,
+                    ARRAY_AGG(DISTINCT NULLIF(metadata->>'user_api_key_alias', ''))
+                        FILTER (WHERE NULLIF(metadata->>'user_api_key_alias', '') IS NOT NULL) AS key_aliases,
+                    (ARRAY_AGG(NULLIF(model, '') ORDER BY "startTime")
+                        FILTER (WHERE NULLIF(model, '') IS NOT NULL))[1] AS primary_model,
+                    MIN(call_type) AS call_type,
+                    MIN(model_id) AS model_id,
+                    MIN(api_base) AS api_base
+                FROM "LiteLLM_SpendLogs"
+                WHERE {" AND ".join(sql_conditions)}
+                GROUP BY {session_group_expr}
+                ORDER BY {session_order_expr} {_sql_dir}{session_nulls_clause},
+                         MAX("startTime") DESC, {session_group_expr}
+                LIMIT ${p} OFFSET ${p + 1}
+            """
         sql_params.extend([page_size, skip])
 
         data = await prisma_client.db.query_raw(sql_query, *sql_params)
@@ -2257,7 +2397,7 @@ async def ui_view_spend_logs(
             page,
             page_size,
             total_pages,
-            enrich_session_counts=not is_v2,
+            enrich_session_counts=is_session_view or is_legacy_session_view,
             total_is_capped=total_is_capped,
         )
     except Exception as e:
@@ -3622,6 +3762,69 @@ async def ui_view_session_spend_logs(
             )
 
 
+async def _fetch_user_aliases(prisma_client: "PrismaClient", user_ids: Sequence[str]) -> tuple[_UserAlias, ...]:
+    if not user_ids:
+        return ()
+    try:
+        user_records = await _user_table(prisma_client).find_many(where={"user_id": {"in": user_ids}})
+        return tuple(
+            _UserAlias(user_id=str(record.user_id), user_alias=str(record.user_alias))
+            for record in user_records
+            if record.user_id and record.user_alias
+        )
+    except Exception:  # noqa: BLE001  # alias lookup is best-effort and must not break logs
+        verbose_proxy_logger.debug("Failed to fetch user aliases for spend logs UI", exc_info=True)
+        return ()
+
+
+def _find_user_alias(aliases: Sequence[_UserAlias], user_id: str) -> str | None:
+    return next((alias.user_alias for alias in aliases if alias.user_id == user_id), None)
+
+
+async def _enrich_rows_with_user_aliases(
+    prisma_client: "PrismaClient", data: Sequence[object], session_rows: bool
+) -> None:
+    if session_rows:
+        user_ids = tuple(
+            sorted(
+                frozenset(
+                    str(user_id)
+                    for row in data
+                    if isinstance(row, dict)
+                    for user_id in (row.get("users") or ())
+                    if user_id
+                )
+            )
+        )
+        aliases = await _fetch_user_aliases(prisma_client, user_ids)
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            row["user_aliases"] = tuple(
+                _UserAliasDisplay(str(user_id), _find_user_alias(aliases, str(user_id)))._asdict()
+                for user_id in (row.get("users") or ())
+                if user_id
+            )
+        return
+
+    user_ids = tuple(
+        sorted(
+            frozenset(
+                str(user_id)
+                for row in data
+                for user_id in (row.get("user") if isinstance(row, dict) else getattr(row, "user", None),)
+                if user_id
+            )
+        )
+    )
+    aliases = await _fetch_user_aliases(prisma_client, user_ids)
+    for row in data:
+        row_user_id = row.get("user") if isinstance(row, dict) else getattr(row, "user", None)
+        alias = _find_user_alias(aliases, str(row_user_id)) if row_user_id else None
+        if alias and isinstance(row, dict):
+            row["user_alias"] = alias
+
+
 async def _build_ui_spend_logs_response(
     prisma_client: "PrismaClient",
     data: list,
@@ -3662,6 +3865,19 @@ async def _build_ui_spend_logs_response(
         A dict with ``data`` (enriched rows), ``total``, ``page``,
         ``page_size``, ``total_pages``, and ``total_is_capped``.
     """
+    session_rows = bool(enrich_session_counts and all(isinstance(row, dict) and row.get("row_type") for row in data))
+    await _enrich_rows_with_user_aliases(prisma_client, data, session_rows)
+
+    if session_rows:
+        return {
+            "data": data,
+            "total": total_records,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
+            "total_is_capped": total_is_capped,
+        }
+
     count_map: dict[str, int] = {}
     if enrich_session_counts:
         session_ids: Sequence[str | None] = list(
