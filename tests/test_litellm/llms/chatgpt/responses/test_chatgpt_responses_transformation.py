@@ -86,6 +86,28 @@ class TestChatGPTResponsesAPITransformation:
         assert headers["accept"] == "text/event-stream"
         assert headers["session_id"] == "session-123"
 
+    @pytest.mark.parametrize("header_name", ["session-id", "session_id"])
+    @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
+    def test_validate_environment_uses_codex_session_header(self, mock_authenticator_class, header_name):
+        mock_auth_instance = MagicMock()
+        mock_auth_instance.get_access_token.return_value = "access-123"
+        mock_auth_instance.get_account_id.return_value = "acct-123"
+        mock_authenticator_class.return_value = mock_auth_instance
+
+        config = ChatGPTResponsesAPIConfig()
+        session_id = "019f56e3-35d1-7bd2-8e50-f54bbeceeae5"
+        headers = config.validate_environment(
+            headers={},
+            model="gpt-5.6",
+            litellm_params=GenericLiteLLMParams(
+                litellm_trace_id="per-call-trace-id",
+                litellm_call_id="per-call-id",
+                proxy_server_request={"headers": {header_name: session_id}},
+            ),
+        )
+
+        assert headers["session_id"] == session_id
+
     @pytest.mark.parametrize(
         "model_name",
         [
@@ -106,6 +128,43 @@ class TestChatGPTResponsesAPITransformation:
         assert request["stream"] is True
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_preserves_prompt_cache_key(self):
+        config = ChatGPTResponsesAPIConfig()
+        request = config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6",
+            input=[{"role": "user", "content": "hello"}],
+            response_api_optional_request_params={
+                "prompt_cache_key": "stable-thread-id",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["prompt_cache_key"] == "stable-thread-id"
+
+    def test_chatgpt_derives_stable_session_id_from_string_input(self):
+        config = ChatGPTResponsesAPIConfig()
+        first_headers = {}
+        second_headers = {}
+
+        config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6",
+            input="hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers=first_headers,
+        )
+        config.transform_responses_api_request(
+            model="chatgpt/gpt-5.6",
+            input="hello",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers=second_headers,
+        )
+
+        assert first_headers["session_id"] == second_headers["session_id"]
+        assert len(first_headers["session_id"]) == 64
 
     @pytest.mark.parametrize(
         "model_name",

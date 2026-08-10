@@ -2,12 +2,15 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import hashlib
+import json
 import os
 import platform
-from typing import Any
+from collections.abc import Mapping
 from uuid import uuid4
 
 import httpx
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
@@ -250,41 +253,138 @@ def get_chatgpt_default_instructions() -> str:
     return os.getenv("CHATGPT_DEFAULT_INSTRUCTIONS") or CHATGPT_DEFAULT_INSTRUCTIONS
 
 
-def _normalize_litellm_params(litellm_params: Any | None) -> dict:
-    if litellm_params is None:
-        return {}
-    if isinstance(litellm_params, dict):
-        return litellm_params
-    if hasattr(litellm_params, "model_dump"):
-        try:
-            return litellm_params.model_dump()
-        except Exception:
-            return {}
-    if hasattr(litellm_params, "dict"):
-        try:
-            return litellm_params.dict()
-        except Exception:
-            return {}
-    return {}
+_MAPPING_ADAPTER = TypeAdapter(Mapping[str, object])
+_SEQUENCE_ADAPTER = TypeAdapter(tuple[object, ...])
 
 
-def get_chatgpt_session_id(litellm_params: Any | None) -> str | None:
-    params = _normalize_litellm_params(litellm_params)
-    for key in ("litellm_session_id", "session_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    metadata = params.get("metadata")
-    if isinstance(metadata, dict):
-        value = metadata.get("session_id")
-        if value:
-            return str(value)
-    for key in ("litellm_trace_id", "litellm_call_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
-    return None
+def _parse_mapping(value: object) -> Mapping[str, object] | None:
+    try:
+        return _MAPPING_ADAPTER.validate_python(value)
+    except ValidationError:
+        return None
 
 
-def ensure_chatgpt_session_id(litellm_params: Any | None) -> str:
+def _parse_session_params(litellm_params: object | None) -> Mapping[str, object] | None:
+    raw_params: object = litellm_params.model_dump() if isinstance(litellm_params, BaseModel) else litellm_params
+    return _parse_mapping(raw_params)
+
+
+def _session_value(value: object | None) -> str | None:
+    return str(value) if value else None
+
+
+def get_explicit_chatgpt_session_id(litellm_params: object | None) -> str | None:
+    params = _parse_session_params(litellm_params)
+    if params is None:
+        return None
+    direct_session_id = _session_value(params.get("litellm_session_id")) or _session_value(params.get("session_id"))
+    if direct_session_id:
+        return direct_session_id
+    metadata = _parse_mapping(params.get("metadata"))
+    metadata_session_id = _session_value(metadata.get("session_id")) if metadata else None
+    if metadata_session_id:
+        return metadata_session_id
+    proxy_server_request = _parse_mapping(params.get("proxy_server_request"))
+    headers = _parse_mapping(proxy_server_request.get("headers")) if proxy_server_request else None
+    if not headers:
+        return None
+    return next(
+        (
+            session_id
+            for key, value in headers.items()
+            if key.lower() in ("session-id", "session_id")
+            for session_id in (_session_value(value),)
+            if session_id
+        ),
+        None,
+    )
+
+
+def get_chatgpt_session_id(litellm_params: object | None) -> str | None:
+    explicit = get_explicit_chatgpt_session_id(litellm_params)
+    if explicit:
+        return explicit
+    params = _parse_session_params(litellm_params)
+    if params is None:
+        return None
+    return _session_value(params.get("litellm_trace_id")) or _session_value(params.get("litellm_call_id"))
+
+
+def ensure_chatgpt_session_id(litellm_params: object | None) -> str:
     return get_chatgpt_session_id(litellm_params) or str(uuid4())
+
+
+def _extract_content_block_text(block: object) -> str | None:
+    if isinstance(block, str):
+        return block
+    block_data = _parse_mapping(block)
+    text = block_data.get("text") if block_data else None
+    return text if isinstance(text, str) else None
+
+
+def _extract_text_content(content: object) -> str | None:
+    if isinstance(content, str):
+        return content
+    try:
+        blocks = _SEQUENCE_ADAPTER.validate_python(content)
+    except ValidationError:
+        return None
+    text_parts = tuple(text for block in blocks for text in (_extract_content_block_text(block),) if text is not None)
+    return "\n".join(text_parts) if text_parts else None
+
+
+def _parse_session_messages(messages: object) -> tuple[Mapping[str, object], ...]:
+    try:
+        values = _SEQUENCE_ADAPTER.validate_python(messages)
+    except ValidationError:
+        return ()
+    return tuple(message for value in values for message in (_parse_mapping(value),) if message is not None)
+
+
+def build_chatgpt_session_prefix_fingerprint(messages: object, account_id: str | None) -> str | None:
+    if isinstance(messages, str):
+        system_text: str | None = None
+        first_user_text: str | None = messages
+    else:
+        message_sequence = _parse_session_messages(messages)
+        first_user_index = next(
+            (index for index, message in enumerate(message_sequence) if message.get("role") == "user"),
+            len(message_sequence),
+        )
+        system_text = next(
+            (
+                text
+                for message in message_sequence[:first_user_index]
+                if message.get("role") == "system"
+                for text in (_extract_text_content(message.get("content")),)
+                if text
+            ),
+            None,
+        )
+        first_user_text = (
+            _extract_text_content(message_sequence[first_user_index].get("content"))
+            if first_user_index < len(message_sequence)
+            else None
+        )
+    if system_text is None and first_user_text is None:
+        return None
+    serialized = (
+        '{"account_id":'
+        f"{json.dumps(account_id or '', ensure_ascii=False)},"
+        '"first_user":'
+        f"{json.dumps(first_user_text or '', ensure_ascii=False)},"
+        '"system":'
+        f"{json.dumps(system_text or '', ensure_ascii=False)}"
+        "}"
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def derive_chatgpt_session_id(litellm_params: object | None, messages: object, account_id: str | None) -> str:
+    existing = get_explicit_chatgpt_session_id(litellm_params)
+    if existing:
+        return existing
+    fingerprint = build_chatgpt_session_prefix_fingerprint(messages, account_id)
+    if fingerprint:
+        return fingerprint
+    return str(uuid4())

@@ -23,9 +23,11 @@ from ..authenticator import Authenticator
 from ..common_utils import (
     CHATGPT_API_BASE,
     GetAccessTokenError,
+    derive_chatgpt_session_id,
     ensure_chatgpt_session_id,
     get_chatgpt_default_headers,
     get_chatgpt_default_instructions,
+    get_explicit_chatgpt_session_id,
 )
 
 
@@ -66,6 +68,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         litellm_params: GenericLiteLLMParams,
         headers: dict,
     ) -> dict:
+        self._apply_derived_session_id_header(input, litellm_params, headers)
         request = super().transform_responses_api_request(
             model,
             input,
@@ -99,9 +102,22 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "reasoning",
             "previous_response_id",
             "truncation",
+            "prompt_cache_key",
         }
 
         return {k: v for k, v in request.items() if k in allowed_keys}
+
+    def _apply_derived_session_id_header(
+        self,
+        input: object,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> None:
+        if get_explicit_chatgpt_session_id(litellm_params):
+            return
+        account_id = self.authenticator.get_account_id()
+        derived = derive_chatgpt_session_id(litellm_params, input, account_id)
+        headers["session_id"] = derived
 
     def transform_response_api_response(
         self,
