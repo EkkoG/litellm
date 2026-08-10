@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import LoginPage from "./LoginPage";
@@ -149,6 +149,31 @@ describe("LoginPage", () => {
     await waitFor(() => {
       expect(mockPush).toHaveBeenCalledWith("http://localhost:4000/sso/key/generate");
     });
+  });
+
+  it("should keep LDAP reachable when SSO auto-redirect is enabled", async () => {
+    (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({
+      data: {
+        auto_redirect_to_sso: true,
+        server_root_path: "/",
+        proxy_base_url: null,
+        sso_configured: true,
+        ldap_configured: true,
+      },
+      isLoading: false,
+    });
+    (getCookieFromDocument as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <LoginPage />
+      </QueryClientProvider>,
+    );
+
+    expect(await screen.findByRole("radio", { name: "LDAP" })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Continue with SSO" })).toBeInTheDocument();
+    expect(mockPush).not.toHaveBeenCalled();
   });
 
   it("should not call router when jwt is invalid and auto_redirect_to_sso is false", async () => {

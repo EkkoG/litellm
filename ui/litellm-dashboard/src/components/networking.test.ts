@@ -79,6 +79,24 @@ describe("networking - expired session handling", () => {
 
     expect(mockFetch).toHaveBeenCalledOnce();
   });
+
+  it("does not log LDAP settings while updating bind credentials", async () => {
+    const consoleLog = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      text: vi.fn().mockResolvedValue(JSON.stringify({ status: "success" })),
+    } as any);
+
+    try {
+      await Networking.updateLDAPSettings("token", {
+        ldap_bind_dn: "cn=admin,dc=example,dc=com",
+        ldap_bind_password: "super-secret",
+      });
+      expect(consoleLog).not.toHaveBeenCalled();
+    } finally {
+      consoleLog.mockRestore();
+    }
+  });
 });
 
 describe("loginCall - storeLoginToken integration", () => {

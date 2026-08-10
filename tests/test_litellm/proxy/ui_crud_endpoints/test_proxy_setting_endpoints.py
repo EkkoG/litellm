@@ -586,6 +586,28 @@ class TestProxySettingEndpoints:
             where={"param_name": "ldap_settings"}
         )
 
+    def test_get_ldap_settings_uses_environment_when_database_record_is_missing(
+        self, mock_proxy_config, mock_auth, monkeypatch
+    ):
+        from unittest.mock import AsyncMock, MagicMock
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_config.find_unique = AsyncMock(return_value=None)
+        monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+        monkeypatch.setenv("LDAP_ENABLED", "true")
+        monkeypatch.setenv("LDAP_URL", "ldaps://ldap.example.com:636")
+        monkeypatch.setenv("LDAP_BASE_DN", "dc=example,dc=com")
+        monkeypatch.setenv("LDAP_BIND_PASSWORD", "environment-secret")
+
+        response = client.get("/get/ldap_settings")
+
+        assert response.status_code == 200
+        values = response.json()["values"]
+        assert values["ldap_enabled"] is True
+        assert values["ldap_url"] == "ldaps://ldap.example.com:636"
+        assert values["ldap_base_dn"] == "dc=example,dc=com"
+        assert values["ldap_bind_password"] == "********"
+
     def test_update_ldap_settings_to_database(self, mock_proxy_config, mock_auth, monkeypatch):
         """LDAP settings can be updated through their own Admin settings endpoint."""
         import json

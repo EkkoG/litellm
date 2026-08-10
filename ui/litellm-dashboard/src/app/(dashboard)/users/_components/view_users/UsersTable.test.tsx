@@ -115,6 +115,7 @@ describe("UsersTable", () => {
       "Spend (USD)",
       "Budget (USD)",
       "SSO ID",
+      "LDAP DN",
       "Virtual Keys",
       "Created At",
       "Updated At",
@@ -196,6 +197,26 @@ describe("UsersTable", () => {
 
     rerender(<Harness data={[makeUser({ metadata: { scim_active: true } } as Partial<UserInfo>)]} />);
     expect(screen.getByTestId("user-status-user-1")).toHaveTextContent("Active");
+  });
+
+  it("renders the LDAP DN only for LDAP users", () => {
+    const ldapDn = "cn=user,ou=users,dc=example,dc=com";
+    const ldapUser = makeUser({
+      user_id: "ldap-user",
+      metadata: { auth_provider: "ldap", ldap_dn: ldapDn },
+    } as Partial<UserInfo>);
+    const ssoUser = makeUser({
+      user_id: "sso-user",
+      metadata: { auth_provider: "sso", ldap_dn: "stale-ldap-dn" },
+    } as Partial<UserInfo>);
+
+    render(<Harness data={[ldapUser, ssoUser]} rowCount={2} />);
+
+    expect(screen.getByText(ldapDn)).toHaveAttribute("title", ldapDn);
+    expect(screen.queryByText("stale-ldap-dn")).not.toBeInTheDocument();
+    const ssoRow = screen.getByTestId("user-actions-sso-user").closest("tr");
+    expect(ssoRow).not.toBeNull();
+    expect(within(ssoRow!).getAllByText("-").length).toBeGreaterThan(0);
   });
 
   describe("row selection", () => {

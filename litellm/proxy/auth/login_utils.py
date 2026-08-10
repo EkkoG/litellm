@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Literal, cast
 
 import jwt
-from fastapi import HTTPException
+from pydantic import BaseModel, ValidationError
 
 import litellm
 from litellm.constants import LITELLM_PROXY_ADMIN_NAME, LITELLM_UI_SESSION_DURATION
@@ -41,6 +41,10 @@ from litellm.proxy.utils import (
 from litellm.repositories.user_repository import UserRepository
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.proxy.ui_sso import ReturnedUITokenObject
+
+
+class _GeneratedKeyResponse(BaseModel):
+    token: str
 
 
 async def _rehash_password_if_needed(user_id: str, password: str, stored: str) -> None:
@@ -116,21 +120,30 @@ async def _generate_ui_session_key(user_id: str, user_role: str) -> str:
             code=500,
         )
 
-    response = await generate_key_helper_fn(
-        request_type="key",
-        **{
-            "user_role": user_role,
-            "duration": LITELLM_UI_SESSION_DURATION,
-            "key_max_budget": litellm.max_ui_session_budget,
-            "models": [],
-            "aliases": {},
-            "config": {},
-            "spend": 0,
-            "user_id": user_id,
-            "team_id": "litellm-dashboard",
-        },
-    )
-    return response["token"]  # type: ignore
+    try:
+        response = _GeneratedKeyResponse.model_validate(
+            await generate_key_helper_fn(
+                request_type="key",
+                user_role=user_role,
+                duration=LITELLM_UI_SESSION_DURATION,
+                key_max_budget=litellm.max_ui_session_budget,
+                spend=0,
+                user_id=user_id,
+                team_id="litellm-dashboard",
+            )
+        )
+    except ValidationError as error:
+        raise ProxyException(
+            message="Failed to generate a UI session token.",
+            type=ProxyErrorTypes.auth_error,
+            param="token",
+            code=500,
+        ) from error
+    return response.token
+
+
+def _user_role_value(user_role: str | LitellmUserRoles) -> str:
+    return user_role.value if isinstance(user_role, LitellmUserRoles) else user_role
 
 
 async def _authenticate_ldap_ui_user(
@@ -143,15 +156,15 @@ async def _authenticate_ldap_ui_user(
         password=password,
         prisma_client=prisma_client,
     )
-    user_id = getattr(ldap_user, "user_id")
-    user_email = getattr(ldap_user, "user_email", None)
-    user_role = getattr(ldap_user, "user_role", LitellmUserRoles.INTERNAL_USER)
+    user_id = ldap_user.user_id
+    user_email = ldap_user.user_email
+    user_role = _user_role_value(ldap_user.user_role or LitellmUserRoles.INTERNAL_USER)
     key = await _generate_ui_session_key(user_id=user_id, user_role=user_role)
     return LoginResult(
         user_id=user_id,
         key=key,
         user_email=user_email,
-        user_role=cast(str, user_role),
+        user_role=user_role,
         login_method="username_password",
     )
 
@@ -187,21 +200,11 @@ async def _authenticate_local_admin_user(_user_row: LiteLLM_UserTable | None) ->
     if get_secret_bool("EXPERIMENTAL_UI_LOGIN"):
         from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
-        user_info: LiteLLM_UserTable | None = None
-        if _user_row is not None:
-            user_info = _user_row
-        elif user_id is not None:
-            user_info = LiteLLM_UserTable(
-                user_id=user_id,
-                user_role=user_role,
-                models=[],
-                max_budget=litellm.max_ui_session_budget,
-            )
-        if user_info is None:
-            raise HTTPException(
-                status_code=401,
-                detail={"error": "User Information is required for experimental UI login"},
-            )
+        user_info = _user_row or LiteLLM_UserTable(
+            user_id=user_id,
+            user_role=user_role,
+            max_budget=litellm.max_ui_session_budget,
+        )
 
         key = ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user_info)
 
@@ -209,7 +212,7 @@ async def _authenticate_local_admin_user(_user_row: LiteLLM_UserTable | None) ->
         user_id=user_id,
         key=key,
         user_email=None,
-        user_role=cast(str, user_role),
+        user_role=_user_role_value(user_role),
         login_method="username_password",
     )
 
@@ -219,7 +222,7 @@ async def authenticate_user(
     password: str,
     master_key: str | None,
     prisma_client: PrismaClient | None,
-    auth_method: Literal["local", "ldap"] | None = None,
+    auth_method: str | None = None,
 ) -> LoginResult:
     """
     Authenticate a user and generate an API key for UI access.

@@ -1,9 +1,15 @@
 import json
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Callable, Literal, Protocol, Sequence, cast
+from types import MappingProxyType
+from typing import (
+    Literal,
+    Protocol,
+    cast,  # noqa: TID251  # ldap3 and generated Prisma wrappers lack structural typing
+)
 
 from pydantic import TypeAdapter, ValidationError
 from starlette.concurrency import run_in_threadpool
@@ -19,6 +25,8 @@ LDAP_USER_STATUS_SYNC_JOB_NAME = "ldap_user_status_sync_job"
 _METADATA_ADAPTER = TypeAdapter(dict[str, object])
 _ENTRY_VALUES_ADAPTER = TypeAdapter(tuple[object, ...])
 _LDAP_RESULT_ADAPTER = TypeAdapter(dict[str, object])
+_OBJECT_MAPPING_ADAPTER = TypeAdapter(dict[str, object])
+_STRING_LIST_ADAPTER = TypeAdapter(list[str])
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,9 +137,9 @@ class _PrismaUserRow(Protocol):
 
 
 class _PrismaUserTable(Protocol):
-    async def find_many(self, *, where: dict[str, object]) -> Sequence[_PrismaUserRow]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_PrismaUserRow]: ...
 
-    async def update(self, *, where: dict[str, str], data: dict[str, str]) -> object: ...
+    async def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> object: ...
 
 
 class _PrismaTransaction(Protocol):
@@ -150,43 +158,60 @@ class _PrismaClient(Protocol):
 
 class PrismaLDAPUserStore:
     def __init__(self, prisma_client: object) -> None:
-        self._prisma_client = cast(_PrismaClient, prisma_client)  # cast-ok: generated Prisma DB types are unavailable
+        self._prisma_client = cast(  # cast-ok: access is constrained immediately by the generated-Prisma Protocol
+            _PrismaClient,
+            prisma_client,
+        )
 
     async def list_ldap_users(self) -> tuple[LiteLLM_UserTable, ...]:
         from prisma import (
             Json,  # pyright: ignore[reportUnknownVariableType]  # generated Prisma JSON wrapper is untyped
         )
 
+        metadata_filter = _OBJECT_MAPPING_ADAPTER.validate_python(
+            MappingProxyType(
+                {
+                    "path": _STRING_LIST_ADAPTER.validate_python(("auth_provider",)),
+                    "equals": Json("ldap"),
+                }
+            )
+        )
         raw_users = await self._prisma_client.db.litellm_usertable.find_many(
-            where={"metadata": {"path": ["auth_provider"], "equals": Json("ldap")}}
+            where=_OBJECT_MAPPING_ADAPTER.validate_python(MappingProxyType({"metadata": metadata_filter}))
         )
         return tuple(
-            LiteLLM_UserTable(user_id=user.user_id, metadata=_metadata_dict(user.metadata)) for user in raw_users
+            LiteLLM_UserTable(
+                user_id=user.user_id,
+                metadata=_METADATA_ADAPTER.validate_python(_metadata_dict(user.metadata)),
+            )
+            for user in raw_users
         )
 
     async def update_metadata(self, updates: Sequence["_LDAPTransition"]) -> None:
         async with self._prisma_client.db.tx() as transaction:
             for update in updates:
                 await transaction.litellm_usertable.update(
-                    where={"user_id": update.user_id},
-                    data={"metadata": _metadata_string(update.metadata or {})},
+                    where=_OBJECT_MAPPING_ADAPTER.validate_python(MappingProxyType({"user_id": update.user_id})),
+                    data=_OBJECT_MAPPING_ADAPTER.validate_python(
+                        MappingProxyType({"metadata": _metadata_string(update.metadata or MappingProxyType({}))})
+                    ),
                 )
 
 
-def _metadata_dict(value: object) -> dict[str, object]:
+def _metadata_dict(value: object) -> Mapping[str, object]:
     if isinstance(value, dict):
-        return _METADATA_ADAPTER.validate_python(value)
+        return MappingProxyType(_METADATA_ADAPTER.validate_python(value))
     if isinstance(value, str):
-        return _METADATA_ADAPTER.validate_json(value)
-    return {}
+        return MappingProxyType(_METADATA_ADAPTER.validate_json(value))
+    return MappingProxyType({})
 
 
-def _metadata_string(metadata: dict[str, object]) -> str:
-    return json.dumps(metadata)
+def _metadata_string(metadata: Mapping[str, object]) -> str:
+    return json.dumps(_METADATA_ADAPTER.validate_python(metadata))
 
 
 def _first_entry_value(entry: _LDAPEntry, attribute_name: str) -> str | None:
-    attribute = cast(  # cast-ok: ldap3 entry attributes are runtime-defined
+    attribute = cast(  # cast-ok: ldap3 entry attributes are dynamic; values are validated immediately below
         _LDAPEntryAttribute | None,
         getattr(entry, attribute_name, None),
     )
@@ -278,7 +303,7 @@ def _collect_ldap_user_statuses(
         raise RuntimeError("LDAP user status synchronization requires ldap3") from error
 
     server = Server(config.ldap_url, get_info=NONE, use_ssl=config.ldap_use_ssl)
-    connection = cast(  # cast-ok: ldap3 is untyped; access is constrained by _LDAPStatusConnection
+    connection = cast(  # cast-ok: ldap3 is untyped; all access is constrained by _LDAPStatusConnection
         _LDAPStatusConnection,
         Connection(
             server,
@@ -375,7 +400,7 @@ class LDAPUserStatusSyncService:
                 abort_reason="LDAP directory query failed",
             )
 
-        users_by_id = {user.user_id: user for user in typed_users}
+        users_by_id = MappingProxyType({user.user_id: user for user in typed_users})
         transitions = tuple(
             _build_transition(users_by_id[outcome.user_id], outcome, config)
             for outcome in outcomes
@@ -391,13 +416,17 @@ class LDAPUserStatusSyncService:
         )
         if deactivation_ratio > config.ldap_sync_max_deactivation_ratio:
             return summary.model_copy(
-                update={
-                    "aborted": True,
-                    "abort_reason": (
-                        f"deactivation ratio {deactivation_ratio:.3f} exceeds configured maximum "
-                        f"{config.ldap_sync_max_deactivation_ratio:.3f}"
-                    ),
-                }
+                update=_OBJECT_MAPPING_ADAPTER.validate_python(
+                    MappingProxyType(
+                        {
+                            "aborted": True,
+                            "abort_reason": (
+                                f"deactivation ratio {deactivation_ratio:.3f} exceeds configured maximum "
+                                f"{config.ldap_sync_max_deactivation_ratio:.3f}"
+                            ),
+                        }
+                    )
+                )
             )
         if dry_run:
             return summary
@@ -482,7 +511,7 @@ class LDAPUserStatusSyncManager:
 @dataclass(frozen=True, slots=True)
 class _LDAPTransition:
     user_id: str
-    metadata: dict[str, object] | None
+    metadata: Mapping[str, object] | None
     activates: bool
     deactivates: bool
 
@@ -499,35 +528,41 @@ def _build_transition(
     checked_at = datetime.now(timezone.utc).isoformat()
     match outcome:
         case LDAPActive(dn=dn):
-            updated = {
-                **metadata,
-                "ldap_dn": dn,
-                "identity_active": True,
-                "identity_status": "active",
-                "identity_status_reason": "ldap_sync_verified",
-                "identity_status_checked_at": checked_at,
-            }
+            updated = MappingProxyType(
+                {
+                    **metadata,
+                    "ldap_dn": dn,
+                    "identity_active": True,
+                    "identity_status": "active",
+                    "identity_status_reason": "ldap_sync_verified",
+                    "identity_status_checked_at": checked_at,
+                }
+            )
             return _LDAPTransition(user.user_id, updated, activates=not was_active, deactivates=False)
         case LDAPInactive(dn=dn):
-            updated = {
-                **metadata,
-                "ldap_dn": dn,
-                "identity_active": False,
-                "identity_status": "inactive",
-                "identity_status_reason": "ldap_access_filter_mismatch",
-                "identity_status_checked_at": checked_at,
-            }
+            updated = MappingProxyType(
+                {
+                    **metadata,
+                    "ldap_dn": dn,
+                    "identity_active": False,
+                    "identity_status": "inactive",
+                    "identity_status_reason": "ldap_access_filter_mismatch",
+                    "identity_status_checked_at": checked_at,
+                }
+            )
             return _LDAPTransition(user.user_id, updated, activates=False, deactivates=was_active)
         case LDAPMissing():
             if config.ldap_missing_user_action == "ignore":
                 return _LDAPTransition(user.user_id, None, activates=False, deactivates=False)
-            updated = {
-                **metadata,
-                "identity_active": False,
-                "identity_status": "inactive",
-                "identity_status_reason": "ldap_user_missing",
-                "identity_status_checked_at": checked_at,
-            }
+            updated = MappingProxyType(
+                {
+                    **metadata,
+                    "identity_active": False,
+                    "identity_status": "inactive",
+                    "identity_status_reason": "ldap_user_missing",
+                    "identity_status_checked_at": checked_at,
+                }
+            )
             return _LDAPTransition(user.user_id, updated, activates=False, deactivates=was_active)
         case LDAPUnknown():
             return _LDAPTransition(user.user_id, None, activates=False, deactivates=False)

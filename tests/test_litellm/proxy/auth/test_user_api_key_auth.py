@@ -1241,13 +1241,15 @@ async def test_proxy_admin_expired_key_from_cache():
     "metadata,expected_message",
     [
         ({"scim_active": False}, "deactivated via SCIM"),
-        ({"identity_active": False}, "inactive external identity"),
+        (
+            {"auth_provider": "ldap", "identity_active": False},
+            "inactive external identity",
+        ),
+        ({"auth_provider": "sso", "identity_active": False}, None),
+        ({"identity_active": False}, None),
     ],
 )
-async def test_deactivated_user_key_is_rejected(metadata, expected_message):
-    """A virtual key whose owning user has metadata.scim_active=False must be
-    rejected by the auth flow (defense in depth on top of key-level blocking).
-    """
+async def test_external_identity_status_only_blocks_its_managed_users(metadata, expected_message):
     from fastapi import Request
     from starlette.datastructures import URL
 
@@ -1319,8 +1321,8 @@ async def test_deactivated_user_key_is_rejected(metadata, expected_message):
                 return_value=deactivated_user,
             ),
         ):
-            with pytest.raises(ProxyException) as exc_info:
-                await _user_api_key_auth_builder(
+            if expected_message is None:
+                result = await _user_api_key_auth_builder(
                     request=request,
                     api_key=f"Bearer {api_key}",
                     azure_api_key_header="",
@@ -1329,8 +1331,19 @@ async def test_deactivated_user_key_is_rejected(metadata, expected_message):
                     azure_apim_header=None,
                     request_data={},
                 )
-
-        assert expected_message in str(exc_info.value.message)
+                assert result.user_id == valid_token.user_id
+            else:
+                with pytest.raises(ProxyException) as exc_info:
+                    await _user_api_key_auth_builder(
+                        request=request,
+                        api_key=f"Bearer {api_key}",
+                        azure_api_key_header="",
+                        anthropic_api_key_header=None,
+                        google_ai_studio_api_key_header=None,
+                        azure_apim_header=None,
+                        request_data={},
+                    )
+                assert expected_message in str(exc_info.value.message)
     finally:
         for attr, val in _original_values.items():
             setattr(_proxy_server_mod, attr, val)

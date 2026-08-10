@@ -25023,6 +25023,12 @@ export interface components {
              */
             ldap_admin_group_dn?: string | null;
             /**
+             * Ldap Allow Insecure
+             * @description Allow LDAP bind without SSL or StartTLS. Not recommended outside isolated development environments
+             * @default false
+             */
+            ldap_allow_insecure: boolean;
+            /**
              * Ldap Base Dn
              * @description Base DN used to search for users
              */
@@ -25120,6 +25126,11 @@ export interface components {
              * @default false
              */
             ldap_use_ssl: boolean;
+            /**
+             * Ldap User Id Attribute
+             * @description Immutable LDAP attribute used as the LiteLLM identity, for example objectGUID or entryUUID
+             */
+            ldap_user_id_attribute?: string | null;
             /**
              * Ldap User Search Filter
              * @description LDAP user search filter. The {username} placeholder is escaped before use

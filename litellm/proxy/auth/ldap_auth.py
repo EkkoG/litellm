@@ -1,32 +1,126 @@
 import json
 import os
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from hashlib import sha256
-from typing import Any, Callable, Dict, List, Literal, Optional, Protocol, Sequence
+from types import MappingProxyType
+from typing import Literal, Protocol, runtime_checkable
 from urllib.parse import urlsplit
 
-from pydantic import Field, TypeAdapter, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_serializer, model_validator
 from starlette.concurrency import run_in_threadpool
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import LiteLLM_UserTable, LitellmUserRoles, ProxyErrorTypes, ProxyException
-from litellm.proxy.management_helpers.utils import get_new_internal_user_defaults
+from litellm.proxy.management_helpers.utils import (
+    get_new_internal_user_defaults,  # pyright: ignore[reportUnknownVariableType]  # legacy helper lacks a concrete return type
+)
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.base_repository import SupportsDict, SupportsModelDump
 from litellm.repositories.config_repository import ConfigRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 LDAP_SETTINGS_PARAM_NAME = "ldap_settings"
-LDAP_SENSITIVE_FIELDS = {"ldap_bind_password"}
-_LDAP_MISSING_USER_ACTION_ADAPTER = TypeAdapter(Literal["ignore", "disable"])
-_LDAP_METADATA_ADAPTER = TypeAdapter(dict[str, object])
+LDAP_SENSITIVE_FIELDS = frozenset({"ldap_bind_password"})
+LDAPMissingUserAction = Literal["ignore", "disable"]
+_LDAP_MISSING_USER_ACTION_ADAPTER: TypeAdapter[LDAPMissingUserAction] = TypeAdapter(LDAPMissingUserAction)
+_LDAP_SETTINGS_ADAPTER: TypeAdapter[Mapping[str, object]] = TypeAdapter(Mapping[str, object])
+_LDAP_SETTINGS_DICT_ADAPTER = TypeAdapter(dict[str, object])
+_LDAP_USER_RECORD_DICT_ADAPTER = TypeAdapter(dict[str, object])
+_LDAP_METADATA_ADAPTER: TypeAdapter[Mapping[str, object]] = TypeAdapter(Mapping[str, object])
+_LDAP_ENTRY_VALUES_ADAPTER: TypeAdapter[tuple[object, ...]] = TypeAdapter(tuple[object, ...])
+_LDAP_PATH_LIST_ADAPTER = TypeAdapter(list[str])
+_DB_RECORD_PAIRS_ADAPTER: TypeAdapter[tuple[tuple[str, object], ...]] = TypeAdapter(tuple[tuple[str, object], ...])
 
 
+class _FrozenModel(BaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True, populate_by_name=True)
+
+
+class _LDAPConfigRecord(_FrozenModel):
+    param_value: object | None = None
+
+
+class _InternalUserDefaults(_FrozenModel):
+    models: tuple[str, ...]
+    user_id: str
+    user_email: str | None = None
+    user_role: str | None = None
+    max_budget: float | None = None
+    budget_duration: str | None = None
+
+
+class _LDAPUserMetadata(_FrozenModel):
+    model_config = ConfigDict(extra="allow", frozen=True, from_attributes=True)
+
+    auth_provider: Literal["ldap"]
+    ldap_username: str
+    ldap_dn: str
+    ldap_principal_hash: str
+    identity_active: bool
+    identity_status: Literal["active"]
+    identity_status_reason: Literal["login_verified"]
+    identity_status_checked_at: str
+
+
+class _UserIdWhere(_FrozenModel):
+    user_id: str
+
+
+class _ConfigParamWhere(_FrozenModel):
+    param_name: str
+
+
+class _LDAPMetadataPathPredicate(_FrozenModel):
+    path: tuple[str, ...]
+    equals: object
+
+    @field_serializer("path")
+    def serialize_path(self, value: tuple[str, ...]) -> Sequence[str]:
+        return _LDAP_PATH_LIST_ADAPTER.validate_python(value)
+
+
+class _LDAPMetadataFilter(_FrozenModel):
+    metadata: _LDAPMetadataPathPredicate
+
+
+class _LDAPIdentityWhere(_FrozenModel):
+    filters: tuple[_LDAPMetadataFilter, ...] = Field(alias="OR")
+
+    @field_serializer("filters")
+    def serialize_filters(self, value: tuple[_LDAPMetadataFilter, ...]) -> Sequence[_LDAPMetadataFilter]:
+        return TypeAdapter(list[_LDAPMetadataFilter]).validate_python(value)
+
+
+class _LDAPUserCreateData(_FrozenModel):
+    models: tuple[str, ...]
+    user_id: str
+    user_email: str | None = None
+    user_role: str | None = None
+    max_budget: float | None = None
+    budget_duration: str | None = None
+    user_alias: str
+    metadata: str
+
+
+class _LDAPUserUpdateData(_FrozenModel):
+    user_alias: str
+    metadata: str
+    user_role: LitellmUserRoles | None = None
+    user_email: str | None = None
+
+
+class _LDAPUserUpsertData(_FrozenModel):
+    create: _LDAPUserCreateData
+    update: _LDAPUserUpdateData
+
+
+@runtime_checkable
 class _LDAPConnection(Protocol):
-    entries: Sequence[object]
-
-    def start_tls(self) -> bool: ...
+    @property
+    def entries(self) -> Sequence[object]: ...
 
     def bind(self) -> bool: ...
 
@@ -40,6 +134,93 @@ class _LDAPConnection(Protocol):
     ) -> bool: ...
 
     def unbind(self) -> object: ...
+
+
+@runtime_checkable
+class _LDAPTLSConnection(Protocol):
+    def start_tls(self) -> bool: ...
+
+
+@runtime_checkable
+class _LDAPEntry(Protocol):
+    @property
+    def entry_dn(self) -> object: ...
+
+
+@runtime_checkable
+class _LDAPAttributeValues(Protocol):
+    @property
+    def values(self) -> object: ...
+
+
+@runtime_checkable
+class _LDAPAttributeValue(Protocol):
+    @property
+    def value(self) -> object: ...
+
+
+class _ConfigTable(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> object | None: ...
+
+
+@runtime_checkable
+class _ConfigRepositoryBoundary(Protocol):
+    @property
+    def table(self) -> _ConfigTable: ...
+
+
+class _UserTable(Protocol):
+    async def find_unique(self, *, where: Mapping[str, object]) -> object | None: ...
+
+    async def find_first(self, *, where: Mapping[str, object]) -> object | None: ...
+
+    async def upsert(
+        self,
+        *,
+        where: Mapping[str, object],
+        data: Mapping[str, object],
+    ) -> object | None: ...
+
+
+@runtime_checkable
+class _UserRepositoryBoundary(Protocol):
+    @property
+    def table(self) -> _UserTable: ...
+
+
+def _config_table(repository: object) -> _ConfigTable:
+    if not isinstance(repository, _ConfigRepositoryBoundary):
+        raise TypeError("LDAP configuration repository does not expose a table")
+    return repository.table
+
+
+def _user_table(repository: object) -> _UserTable:
+    if not isinstance(repository, _UserRepositoryBoundary):
+        raise TypeError("LDAP user repository does not expose a table")
+    return repository.table
+
+
+def _ldap_connection(value: object) -> _LDAPConnection:
+    if not isinstance(value, _LDAPConnection):
+        raise TypeError("LDAP client returned an incompatible connection")
+    return value
+
+
+def _start_tls(connection: _LDAPConnection) -> bool:
+    if not isinstance(connection, _LDAPTLSConnection):
+        raise TypeError("LDAP connection does not support StartTLS")
+    return connection.start_tls()
+
+
+def _record_mapping(record: object) -> Mapping[str, object]:
+    if isinstance(record, Mapping):
+        return _LDAP_METADATA_ADAPTER.validate_python(record)
+    if isinstance(record, SupportsModelDump):
+        return _LDAP_METADATA_ADAPTER.validate_python(record.model_dump())
+    if isinstance(record, SupportsDict):
+        return _LDAP_METADATA_ADAPTER.validate_python(record.dict())
+    pairs = _DB_RECORD_PAIRS_ADAPTER.validate_python(record)
+    return MappingProxyType({key: value for key, value in pairs})
 
 
 def ldap_service_unavailable_error(stage: str, ldap_url: str, error: BaseException) -> ProxyException:
@@ -59,11 +240,11 @@ def ldap_service_unavailable_error(stage: str, ldap_url: str, error: BaseExcepti
 
 class LDAPConfig(LiteLLMPydanticObjectBase):
     ldap_enabled: bool = Field(default=False, description="Enable LDAP login for the Admin UI")
-    ldap_url: Optional[str] = Field(default=None, description="LDAP server URL, for example ldap://host:389")
-    ldap_base_dn: Optional[str] = Field(default=None, description="Base DN used to search for users")
-    ldap_search_base: Optional[str] = Field(default=None, description="Optional search base. Defaults to base DN")
-    ldap_bind_dn: Optional[str] = Field(default=None, description="Service account DN used to search users")
-    ldap_bind_password: Optional[str] = Field(default=None, description="Service account password")
+    ldap_url: str | None = Field(default=None, description="LDAP server URL, for example ldap://host:389")
+    ldap_base_dn: str | None = Field(default=None, description="Base DN used to search for users")
+    ldap_search_base: str | None = Field(default=None, description="Optional search base. Defaults to base DN")
+    ldap_bind_dn: str | None = Field(default=None, description="Service account DN used to search users")
+    ldap_bind_password: str | None = Field(default=None, description="Service account password")
     ldap_user_search_filter: str = Field(
         default="(|(uid={username})(sAMAccountName={username})(userPrincipalName={username}))",
         description="LDAP user search filter. The {username} placeholder is escaped before use",
@@ -73,7 +254,7 @@ class LDAPConfig(LiteLLMPydanticObjectBase):
         description="Optional LDAP filter that eligible users must match, evaluated against the user entry",
     )
     ldap_email_attribute: str = Field(default="mail", description="LDAP attribute used as the LiteLLM user email")
-    ldap_user_id_attribute: Optional[str] = Field(
+    ldap_user_id_attribute: str | None = Field(
         default=None,
         description="Immutable LDAP attribute used as the LiteLLM identity, for example objectGUID or entryUUID",
     )
@@ -82,7 +263,7 @@ class LDAPConfig(LiteLLMPydanticObjectBase):
         description="LDAP attribute used as the LiteLLM user display name",
     )
     ldap_group_attribute: str = Field(default="memberOf", description="LDAP attribute containing user group DNs")
-    ldap_admin_group_dn: Optional[str] = Field(
+    ldap_admin_group_dn: str | None = Field(
         default=None,
         description="LDAP group DN whose members should become LiteLLM proxy admins",
     )
@@ -107,7 +288,7 @@ class LDAPConfig(LiteLLMPydanticObjectBase):
         gt=0,
         description="Redis lock lifetime for a single LDAP synchronization run",
     )
-    ldap_missing_user_action: Literal["ignore", "disable"] = Field(
+    ldap_missing_user_action: LDAPMissingUserAction = Field(
         default="ignore",
         description="Action when a previously synchronized LDAP user no longer exists",
     )
@@ -125,14 +306,14 @@ class LDAPConfig(LiteLLMPydanticObjectBase):
         return self
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class LDAPDirectoryUser:
     username: str
     dn: str
-    email: Optional[str]
-    display_name: Optional[str]
-    principal_id: Optional[str] = None
-    groups: List[str] = field(default_factory=list)
+    email: str | None
+    display_name: str | None
+    principal_id: str | None = None
+    groups: tuple[str, ...] = ()
     user_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER
 
     @property
@@ -150,10 +331,10 @@ class LDAPDirectoryUser:
         return f"ldap:{identifier.casefold()}"
 
 
-def _parse_bool(value: Optional[str], default: bool = False) -> bool:
+def _parse_bool(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
-    return value.lower() in {"1", "true", "yes", "on"}
+    return value.lower() in frozenset({"1", "true", "yes", "on"})
 
 
 def _load_ldap_config_from_env() -> LDAPConfig:
@@ -189,39 +370,47 @@ def _load_ldap_config_from_env() -> LDAPConfig:
     )
 
 
-def _parse_db_param_value(param_value: Any) -> Dict[str, Any]:
+def _parse_db_param_value(param_value: object) -> Mapping[str, object]:
     if param_value is None:
-        return {}
+        return MappingProxyType({})
     if isinstance(param_value, str):
-        return json.loads(param_value)
-    return dict(param_value)
+        return _LDAP_SETTINGS_ADAPTER.validate_json(param_value)
+    return _LDAP_SETTINGS_ADAPTER.validate_python(param_value)
 
 
-def _parse_user_metadata(value: object) -> dict[str, object]:
+def _parse_user_metadata(value: object) -> Mapping[str, object]:
     try:
         if isinstance(value, str):
             return _LDAP_METADATA_ADAPTER.validate_json(value)
-        return _LDAP_METADATA_ADAPTER.validate_python(value or {})
+        return _LDAP_METADATA_ADAPTER.validate_python(value or MappingProxyType({}))
     except (TypeError, ValueError, ValidationError):
-        return {}
+        return MappingProxyType({})
 
 
-async def load_ldap_config(prisma_client: Optional[PrismaClient]) -> LDAPConfig:
+async def load_ldap_config(prisma_client: PrismaClient | None) -> LDAPConfig:
     if prisma_client is None:
         return _load_ldap_config_from_env()
 
-    record = await ConfigRepository(prisma_client).table.find_unique(where={"param_name": LDAP_SETTINGS_PARAM_NAME})
-    if record is None or not getattr(record, "param_value", None):
+    repository: object = ConfigRepository(prisma_client)
+    record = await _config_table(repository).find_unique(
+        where=_ConfigParamWhere(param_name=LDAP_SETTINGS_PARAM_NAME).model_dump(mode="json")
+    )
+    if record is None:
+        return _load_ldap_config_from_env()
+    config_record = _LDAPConfigRecord.model_validate(record)
+    if not config_record.param_value:
         return _load_ldap_config_from_env()
 
-    settings = _parse_db_param_value(record.param_value)
+    settings = _parse_db_param_value(config_record.param_value)
     from litellm.proxy.proxy_server import proxy_config
 
-    decrypted_settings = proxy_config._decrypt_db_variables(settings)
-    return LDAPConfig(**decrypted_settings)
+    decrypted_settings: object = proxy_config._decrypt_db_variables(  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType, reportUnknownVariableType]  # legacy decryptor is untyped and intentionally avoids mutating the environment
+        _LDAP_SETTINGS_DICT_ADAPTER.validate_python(settings)
+    )
+    return LDAPConfig.model_validate(decrypted_settings)
 
 
-async def is_ldap_configured(prisma_client: Optional[PrismaClient] = None) -> bool:
+async def is_ldap_configured(prisma_client: PrismaClient | None = None) -> bool:
     config = await load_ldap_config(prisma_client)
     return is_ldap_config_enabled(config)
 
@@ -230,25 +419,29 @@ def is_ldap_config_enabled(config: LDAPConfig) -> bool:
     return bool(config.ldap_enabled and config.ldap_url and config.ldap_base_dn)
 
 
-def _entry_values(entry: Any, attribute_name: str) -> List[str]:
-    attr = getattr(entry, attribute_name, None)
-    if attr is None:
-        return []
-    values = getattr(attr, "values", None)
-    if values is None:
-        value = getattr(attr, "value", None)
-        return [str(value)] if value is not None else []
-    if isinstance(values, (list, tuple, set)):
-        return [str(value) for value in values if value is not None]
-    return [str(values)]
+def _entry_values(entry: object, attribute_name: str) -> tuple[str, ...]:
+    attribute: object = getattr(entry, attribute_name, None)  # pyright: ignore[reportAny]  # ldap3 exposes schema-defined attributes dynamically
+    if attribute is None:
+        return ()
+    if isinstance(attribute, _LDAPAttributeValues):
+        raw_values = attribute.values
+        if isinstance(raw_values, (list, tuple, set)):
+            values = _LDAP_ENTRY_VALUES_ADAPTER.validate_python(raw_values)
+            return tuple(str(value) for value in values if value is not None)
+        if raw_values is not None:
+            return (str(raw_values),)
+    if isinstance(attribute, _LDAPAttributeValue):
+        value = attribute.value
+        return (str(value),) if value is not None else ()
+    return ()
 
 
-def _entry_first_value(entry: Any, attribute_name: str) -> Optional[str]:
+def _entry_first_value(entry: object, attribute_name: str) -> str | None:
     values = _entry_values(entry, attribute_name)
     return values[0] if values else None
 
 
-def _ldap_user_role(groups: List[str], admin_group_dn: str | None) -> LitellmUserRoles:
+def _ldap_user_role(groups: Sequence[str], admin_group_dn: str | None) -> LitellmUserRoles:
     if not admin_group_dn:
         return LitellmUserRoles.INTERNAL_USER
     normalized_groups = frozenset(group.strip().casefold() for group in groups)
@@ -258,7 +451,7 @@ def _ldap_user_role(groups: List[str], admin_group_dn: str | None) -> LitellmUse
 
 
 def _bind_ldap_directory(connection: _LDAPConnection, config: LDAPConfig) -> None:
-    if config.ldap_start_tls and not connection.start_tls():
+    if config.ldap_start_tls and not _start_tls(connection):
         raise ProxyException(
             message="LDAP directory connection could not establish StartTLS.",
             type=ProxyErrorTypes.auth_error,
@@ -281,15 +474,19 @@ def _find_ldap_directory_user(
     subtree_scope: object,
     base_scope: object,
     escape_filter_chars: Callable[[str], str],
-) -> tuple[str, str | None, str | None, List[str], str | None] | None:
+) -> tuple[str, str | None, str | None, tuple[str, ...], str | None] | None:
     search_filter = config.ldap_user_search_filter.replace("{username}", escape_filter_chars(username))
-    attributes = list(
-        {
-            config.ldap_email_attribute,
-            config.ldap_display_name_attribute,
-            config.ldap_group_attribute,
-            *([config.ldap_user_id_attribute] if config.ldap_user_id_attribute else []),
-        }
+    attributes = tuple(
+        frozenset(
+            attribute
+            for attribute in (
+                config.ldap_email_attribute,
+                config.ldap_display_name_attribute,
+                config.ldap_group_attribute,
+                config.ldap_user_id_attribute,
+            )
+            if attribute is not None
+        )
     )
     if (
         not connection.search(
@@ -303,7 +500,9 @@ def _find_ldap_directory_user(
     ):
         return None
     entry = connection.entries[0]
-    user_dn = str(getattr(entry, "entry_dn"))
+    if not isinstance(entry, _LDAPEntry):
+        raise TypeError("LDAP search result does not expose an entry DN")
+    user_dn = str(entry.entry_dn)
     if config.ldap_access_filter and (
         not connection.search(
             search_base=user_dn,
@@ -325,7 +524,7 @@ def _find_ldap_directory_user(
 
 
 def _bind_ldap_user(connection: _LDAPConnection, config: LDAPConfig) -> bool:
-    if config.ldap_start_tls and not connection.start_tls():
+    if config.ldap_start_tls and not _start_tls(connection):
         raise ProxyException(
             message="LDAP user connection could not establish StartTLS.",
             type=ProxyErrorTypes.auth_error,
@@ -339,7 +538,7 @@ def _authenticate_ldap_credentials(
     config: LDAPConfig,
     username: str,
     password: str,
-) -> Optional[LDAPDirectoryUser]:
+) -> LDAPDirectoryUser | None:
     if not config.ldap_allow_insecure and not config.ldap_use_ssl and not config.ldap_start_tls:
         raise ProxyException(
             message="LDAP authentication requires SSL or StartTLS unless insecure LDAP is explicitly enabled.",
@@ -371,11 +570,13 @@ def _authenticate_ldap_credentials(
         return None
 
     server = Server(config.ldap_url, get_info=NONE, use_ssl=config.ldap_use_ssl)
-    bind_conn = Connection(
-        server,
-        user=config.ldap_bind_dn,
-        password=config.ldap_bind_password,
-        auto_bind=False,
+    bind_conn = _ldap_connection(
+        Connection(
+            server,
+            user=config.ldap_bind_dn,
+            password=config.ldap_bind_password,
+            auto_bind=False,
+        )
     )
     try:
         _bind_ldap_directory(bind_conn, config)
@@ -395,7 +596,7 @@ def _authenticate_ldap_credentials(
     finally:
         safe_unbind(bind_conn, "directory lookup")
 
-    user_conn = Connection(server, user=user_dn, password=password, auto_bind=False)
+    user_conn = _ldap_connection(Connection(server, user=user_dn, password=password, auto_bind=False))
     try:
         if not _bind_ldap_user(user_conn, config):
             return None
@@ -415,31 +616,110 @@ def _authenticate_ldap_credentials(
     )
 
 
-async def _resolve_ldap_user_id(
-    user_repository: UserRepository,
-    directory_user: LDAPDirectoryUser,
-) -> str:
+def _prisma_json(value: str) -> object:
     from prisma import Json  # pyright: ignore[reportUnknownVariableType]  # generated Prisma JSON wrapper is untyped
 
-    stable_user = await user_repository.table.find_unique(where={"user_id": directory_user.user_id})
-    if stable_user is not None:
-        return str(getattr(stable_user, "user_id", None) or stable_user["user_id"])
+    json_value: object = Json(value)
+    return json_value
 
-    legacy_user = await user_repository.table.find_unique(where={"user_id": directory_user.legacy_user_id})
-    if legacy_user is not None:
-        return str(getattr(legacy_user, "user_id", None) or legacy_user["user_id"])
 
-    metadata_user = await user_repository.table.find_first(
-        where={
-            "OR": [
-                {"metadata": {"path": ["ldap_principal_hash"], "equals": Json(directory_user.principal_hash)}},
-                {"metadata": {"path": ["ldap_dn"], "equals": Json(directory_user.dn)}},
-            ]
-        }
+async def _resolve_ldap_user_id(
+    user_repository: object,
+    directory_user: LDAPDirectoryUser,
+) -> str:
+    user_table = _user_table(user_repository)
+    stable_user = await user_table.find_unique(
+        where=_UserIdWhere(user_id=directory_user.user_id).model_dump(mode="json")
     )
+    if stable_user is not None:
+        return str(_record_mapping(stable_user)["user_id"])
+
+    legacy_user = await user_table.find_unique(
+        where=_UserIdWhere(user_id=directory_user.legacy_user_id).model_dump(mode="json")
+    )
+    if legacy_user is not None:
+        return str(_record_mapping(legacy_user)["user_id"])
+
+    metadata_where = _LDAPIdentityWhere(
+        OR=(
+            _LDAPMetadataFilter(
+                metadata=_LDAPMetadataPathPredicate(
+                    path=("ldap_principal_hash",),
+                    equals=_prisma_json(directory_user.principal_hash),
+                )
+            ),
+            _LDAPMetadataFilter(
+                metadata=_LDAPMetadataPathPredicate(
+                    path=("ldap_dn",),
+                    equals=_prisma_json(directory_user.dn),
+                )
+            ),
+        )
+    )
+    metadata_user = await user_table.find_first(where=metadata_where.model_dump(mode="python", by_alias=True))
     if metadata_user is not None:
-        return str(getattr(metadata_user, "user_id", None) or metadata_user["user_id"])
+        return str(_record_mapping(metadata_user)["user_id"])
     return directory_user.user_id
+
+
+def _ldap_metadata(directory_user: LDAPDirectoryUser, existing_metadata: Mapping[str, object]) -> str:
+    checked_at = datetime.now(timezone.utc).isoformat()
+    metadata = _LDAPUserMetadata.model_validate(
+        MappingProxyType(
+            {
+                **existing_metadata,
+                "auth_provider": "ldap",
+                "ldap_username": directory_user.username,
+                "ldap_dn": directory_user.dn,
+                "ldap_principal_hash": directory_user.principal_hash,
+                "identity_active": True,
+                "identity_status": "active",
+                "identity_status_reason": "login_verified",
+                "identity_status_checked_at": checked_at,
+            }
+        )
+    )
+    return json.dumps(metadata.model_dump())
+
+
+def _create_ldap_user_data(
+    directory_user: LDAPDirectoryUser,
+    resolved_user_id: str,
+    ldap_metadata: str,
+    sync_user_role: bool,
+) -> _LDAPUserCreateData:
+    raw_defaults: object = get_new_internal_user_defaults(  # pyright: ignore[reportUnknownVariableType]  # the result is validated immediately into a frozen model
+        user_id=resolved_user_id,
+        user_email=directory_user.email,
+    )
+    defaults = _InternalUserDefaults.model_validate(raw_defaults)
+    return _LDAPUserCreateData(
+        models=defaults.models,
+        user_id=defaults.user_id,
+        user_email=defaults.user_email,
+        user_role=directory_user.user_role if sync_user_role else defaults.user_role,
+        max_budget=defaults.max_budget,
+        budget_duration=defaults.budget_duration,
+        user_alias=directory_user.display_name or directory_user.username,
+        metadata=ldap_metadata,
+    )
+
+
+def _user_model_from_record(record: object, fallback: _LDAPUserCreateData) -> LiteLLM_UserTable:
+    if isinstance(record, LiteLLM_UserTable):
+        return record
+    row = _record_mapping(record)
+    metadata_value = row.get("metadata")
+    normalized_row = (
+        MappingProxyType({**row, "metadata": _parse_user_metadata(metadata_value)})
+        if isinstance(metadata_value, str)
+        else row
+    )
+    return LiteLLM_UserTable.model_validate(
+        _LDAP_USER_RECORD_DICT_ADAPTER.validate_python(
+            normalized_row or fallback.model_dump(mode="json", exclude_none=True)
+        )
+    )
 
 
 async def _sync_ldap_user(
@@ -447,64 +727,37 @@ async def _sync_ldap_user(
     directory_user: LDAPDirectoryUser,
     sync_user_role: bool = False,
 ) -> LiteLLM_UserTable:
-    user_repository = UserRepository(prisma_client)
-    resolved_user_id = await _resolve_ldap_user_id(user_repository, directory_user)
-    existing_user = await user_repository.table.find_unique(where={"user_id": resolved_user_id})
-    existing_metadata_value = getattr(existing_user, "metadata", None) if existing_user is not None else None
-    if isinstance(existing_user, dict):
-        existing_metadata_value = existing_user.get("metadata")
-    existing_metadata = _parse_user_metadata(existing_metadata_value)
-    checked_at = datetime.now(timezone.utc).isoformat()
-    ldap_metadata = json.dumps(
-        {
-            **existing_metadata,
-            "auth_provider": "ldap",
-            "ldap_username": directory_user.username,
-            "ldap_dn": directory_user.dn,
-            "ldap_principal_hash": directory_user.principal_hash,
-            "identity_active": True,
-            "identity_status": "active",
-            "identity_status_reason": "login_verified",
-            "identity_status_checked_at": checked_at,
-        }
+    repository: object = UserRepository(prisma_client)
+    user_table = _user_table(repository)
+    resolved_user_id = await _resolve_ldap_user_id(repository, directory_user)
+    existing_user = await user_table.find_unique(where=_UserIdWhere(user_id=resolved_user_id).model_dump(mode="json"))
+    existing_metadata: Mapping[str, object] = (
+        _parse_user_metadata(_record_mapping(existing_user).get("metadata"))
+        if existing_user is not None
+        else MappingProxyType({})
     )
-    create_data = get_new_internal_user_defaults(
-        user_id=resolved_user_id,
+    ldap_metadata = _ldap_metadata(directory_user, existing_metadata)
+    create_data = _create_ldap_user_data(directory_user, resolved_user_id, ldap_metadata, sync_user_role)
+    update_data = _LDAPUserUpdateData(
+        user_alias=directory_user.display_name or directory_user.username,
+        metadata=ldap_metadata,
+        user_role=directory_user.user_role if sync_user_role else None,
         user_email=directory_user.email,
     )
-    if sync_user_role:
-        create_data["user_role"] = directory_user.user_role
-    create_data["user_alias"] = directory_user.display_name or directory_user.username
-    create_data["metadata"] = ldap_metadata
-
-    update_data: Dict[str, Any] = {
-        "user_alias": directory_user.display_name or directory_user.username,
-        "metadata": ldap_metadata,
-    }
-    if sync_user_role:
-        update_data["user_role"] = directory_user.user_role
-    if directory_user.email is not None:
-        update_data["user_email"] = directory_user.email
-
-    row = await user_repository.table.upsert(
-        where={"user_id": resolved_user_id},
-        data={
-            "create": create_data,
-            "update": update_data,
-        },
+    upsert_data = _LDAPUserUpsertData(create=create_data, update=update_data)
+    row = await user_table.upsert(
+        where=_UserIdWhere(user_id=resolved_user_id).model_dump(mode="json"),
+        data=upsert_data.model_dump(mode="json", exclude_none=True),
     )
-    if isinstance(row, LiteLLM_UserTable):
-        return row
-    user_model = user_repository._to_model(row)
-    if user_model is not None:
-        return user_model
-    return LiteLLM_UserTable(**create_data)
+    if row is None:
+        return LiteLLM_UserTable.model_validate(create_data.model_dump(mode="json", exclude_none=True))
+    return _user_model_from_record(row, create_data)
 
 
 async def authenticate_ldap_user(
     username: str,
     password: str,
-    prisma_client: Optional[PrismaClient],
+    prisma_client: PrismaClient | None,
 ) -> LiteLLM_UserTable:
     if prisma_client is None:
         raise ProxyException(

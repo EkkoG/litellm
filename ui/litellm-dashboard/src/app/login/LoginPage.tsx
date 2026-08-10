@@ -86,7 +86,7 @@ function LoginPageContent() {
       return;
     }
 
-    if (uiConfig && uiConfig.auto_redirect_to_sso) {
+    if (uiConfig && uiConfig.auto_redirect_to_sso && !uiConfig.ldap_configured) {
       // For SSO, pass the return URL to the SSO endpoint
       const returnUrl = getReturnUrl();
       let ssoUrl = `${getProxyBaseUrl()}/sso/key/generate`;

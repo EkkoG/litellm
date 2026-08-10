@@ -21,6 +21,7 @@ def test_ui_discovery_endpoints_with_defaults():
         patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
         patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
         patch("litellm.proxy.auth.auth_utils._has_user_setup_sso", return_value=False),
+        patch("litellm.proxy.auth.ldap_auth.is_ldap_configured", new=AsyncMock(return_value=False)),
         patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}, clear=False),
     ):
 

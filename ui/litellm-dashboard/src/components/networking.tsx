@@ -6352,7 +6352,6 @@ export const updateSSOSettings = async (accessToken: string, settings: Record<st
 export const getLDAPSettings = async (accessToken: string) => {
   try {
     const data = await apiClient.get(`/get/ldap_settings`, { accessToken });
-    console.log("Fetched LDAP configuration:", data);
     return data;
   } catch (error) {
     console.error("Failed to fetch LDAP configuration:", error);
@@ -6362,9 +6361,7 @@ export const getLDAPSettings = async (accessToken: string) => {
 
 export const updateLDAPSettings = async (accessToken: string, settings: Record<string, unknown>) => {
   try {
-    console.log("Updating LDAP configuration:", settings);
     const data = await apiClient.patch(`/update/ldap_settings`, { accessToken, body: settings });
-    console.log("Updated LDAP configuration:", data);
     return data;
   } catch (error) {
     console.error("Failed to update LDAP configuration:", error);

@@ -34,7 +34,7 @@ from typing import (
 import anyio
 import websockets
 import websockets.exceptions
-from pydantic import BaseModel, Json, JsonValue
+from pydantic import BaseModel, Json, JsonValue, TypeAdapter
 from typing_extensions import NotRequired, assert_never
 
 from litellm._uuid import uuid
@@ -13726,10 +13726,7 @@ async def login(request: Request):
     username = str(form.get("username"))
     password = str(form.get("password"))
     auth_method_value = form.get("auth_method")
-    auth_method = cast(
-        Optional[Literal["local", "ldap"]],
-        str(auth_method_value) if auth_method_value is not None else None,
-    )
+    auth_method = str(auth_method_value) if auth_method_value is not None else None
 
     # Authenticate user and get login result
     login_result = await authenticate_user(
@@ -13806,14 +13803,11 @@ async def login_v2(request: Request):
     from litellm.proxy.utils import get_custom_url
 
     try:
-        body = await request.json()
+        body = TypeAdapter(dict[str, object]).validate_python(await request.json())
         username = str(body.get("username"))
         password = str(body.get("password"))
         auth_method_value = body.get("auth_method")
-        auth_method = cast(
-            Optional[Literal["local", "ldap"]],
-            str(auth_method_value) if auth_method_value is not None else None,
-        )
+        auth_method = str(auth_method_value) if auth_method_value is not None else None
 
         login_result = await authenticate_user(
             username=username,
@@ -13885,14 +13879,11 @@ async def login_v3(request: Request):
                 code=status.HTTP_404_NOT_FOUND,
             )
 
-        body = await request.json()
+        body = TypeAdapter(dict[str, object]).validate_python(await request.json())
         username = str(body.get("username"))
         password = str(body.get("password"))
         auth_method_value = body.get("auth_method")
-        auth_method = cast(
-            Optional[Literal["local", "ldap"]],
-            str(auth_method_value) if auth_method_value is not None else None,
-        )
+        auth_method = str(auth_method_value) if auth_method_value is not None else None
 
         login_result = await authenticate_user(
             username=username,

@@ -674,6 +674,8 @@ async def test_get_users_redacts_scim_enterprise_metadata(mocker):
         "user_email": "listed@example.com",
         "user_role": "internal_user",
         "metadata": {
+            "auth_provider": "ldap",
+            "ldap_dn": "cn=listed-user,ou=users,dc=example,dc=com",
             "scim_metadata": {"givenName": "Jane", "familyName": "Doe"},
             "scim_enterprise": {"costCenter": "CC-42", "department": "Platform"},
         },
@@ -704,6 +706,8 @@ async def test_get_users_redacts_scim_enterprise_metadata(mocker):
 
     listed = response["users"][0]
     assert listed.metadata == {
+        "auth_provider": "ldap",
+        "ldap_dn": "cn=listed-user,ou=users,dc=example,dc=com",
         "scim_metadata": {"givenName": "Jane", "familyName": "Doe"}
     }
     assert "scim_enterprise" not in (listed.metadata or {})

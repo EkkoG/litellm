@@ -22,9 +22,19 @@ const SSO_ID_HINT =
   "SSO ID is the ID of the user in the SSO provider. If the user is not using SSO, this will be null.";
 
 const SCIM_INACTIVE_HINT = "Deactivated via SCIM (external identity provider). The user's virtual keys are blocked.";
+const LDAP_DN_HINT =
+  "LDAP DN is the distinguished name from the LDAP directory for users authenticated via LDAP. If the user is not using LDAP, this will be null.";
 
 function isScimInactive(user: UserInfo): boolean {
   return (user.metadata as Record<string, unknown> | null | undefined)?.scim_active === false;
+}
+
+function getLdapDn(user: UserInfo): string | null {
+  const metadata = user.metadata as Record<string, unknown> | null | undefined;
+  if (metadata?.auth_provider !== "ldap") {
+    return null;
+  }
+  return typeof metadata.ldap_dn === "string" && metadata.ldap_dn.length > 0 ? metadata.ldap_dn : null;
 }
 
 interface UserRowActionsProps {
@@ -194,6 +204,29 @@ export const getUsersTableColumns = ({
           {row.original.sso_user_id ?? "-"}
         </span>
       ),
+    },
+    {
+      id: "ldap_dn",
+      meta: { title: "LDAP DN" },
+      header: () => (
+        <span className="flex items-center gap-1.5">
+          LDAP DN
+          <CellTooltip
+            content={LDAP_DN_HINT}
+            trigger={<Info className="size-3.5 shrink-0 text-muted-foreground" aria-label="About LDAP DN" />}
+          />
+        </span>
+      ),
+      size: 260,
+      enableSorting: false,
+      cell: ({ row }) => {
+        const ldapDn = getLdapDn(row.original);
+        return (
+          <span className="block max-w-64 truncate font-mono text-xs" title={ldapDn ?? undefined}>
+            {ldapDn ?? "-"}
+          </span>
+        );
+      },
     },
     {
       id: "key_count",
