@@ -60,13 +60,10 @@ describe("ReliabilityRetriesSection", () => {
     expect(input.value).toBe("");
   });
 
-  it("should render object values stringified into the input", () => {
+  it("should not render model_group_alias since it is managed by its own tab", () => {
     const settings = { model_group_alias: { "gpt-4": "gpt-4-turbo" } };
     render(<ReliabilityRetriesSection routerSettings={settings} routerFieldsMetadata={{}} />);
-    // HTML input type=text strips newlines, so check that the key/value appears
-    const input = screen.getByRole("textbox", { name: /model_group_alias/i }) as HTMLInputElement;
-    expect(input.value).toContain('"gpt-4"');
-    expect(input.value).toContain('"gpt-4-turbo"');
+    expect(screen.queryByRole("textbox", { name: /model_group_alias/i })).toBeNull();
   });
 
   it("should render no inputs when routerSettings is empty", () => {

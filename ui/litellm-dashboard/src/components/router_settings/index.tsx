@@ -87,10 +87,10 @@ const RouterSettings: React.FC<RouterSettingsProps> = ({ accessToken, userRole, 
     const router_settings = formValue.routerSettings;
 
     const numberKeys = new Set(["allowed_fails", "cooldown_time", "num_retries", "timeout", "retry_after"]);
-    const jsonKeys = new Set(["model_group_alias"]);
+    const jsonKeys = new Set<string>();
     // retry_policy and model_group_retry_policy are owned by the Model Retry Settings tab;
     // routing_groups is owned by the Routing Groups tab. This page must not read or write them.
-    const tabOwnedKeys = new Set(["retry_policy", "model_group_retry_policy", "routing_groups"]);
+    const tabOwnedKeys = new Set(["retry_policy", "model_group_retry_policy", "routing_groups", "model_group_alias"]);
 
     const parseInputValue = (key: string, raw: string | undefined, fallback: unknown) => {
       if (raw === undefined) return fallback;

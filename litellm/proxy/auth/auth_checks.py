@@ -3005,9 +3005,23 @@ def _can_object_call_model(
     if model in litellm.model_alias_map:
         potential_models.append(litellm.model_alias_map[model])
     elif llm_router and model in llm_router.model_group_alias:
-        _model = llm_router._get_model_from_alias(model)
-        if _model:
-            potential_models.append(_model)
+        alias_resolution = llm_router.resolve_model_group_alias(model)
+        if alias_resolution.kind == "disabled":
+            raise ProxyException(
+                message=f"Model group alias '{model}' is disabled",
+                type=ProxyErrorTypes.get_model_access_error_type_for_object(object_type=object_type),
+                param="model",
+                code=403,
+            )
+        if alias_resolution.kind == "invalid":
+            raise ProxyException(
+                message=alias_resolution.reason or "Invalid model group alias configuration",
+                type=ProxyErrorTypes.bad_request_error,
+                param="model",
+                code=400,
+            )
+        if alias_resolution.kind == "active" and alias_resolution.model:
+            potential_models.append(alias_resolution.model)
 
     ## check model access for alias + underlying model - allow if either is in allowed models
     for m in potential_models:

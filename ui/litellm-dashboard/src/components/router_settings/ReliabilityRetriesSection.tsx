@@ -28,6 +28,7 @@ const ReliabilityRetriesSection: React.FC<ReliabilityRetriesSectionProps> = ({
               param != "enable_tag_filtering" &&
               param != "retry_policy" &&
               param != "model_group_retry_policy" &&
+              param != "model_group_alias" &&
               param != "routing_groups",
           )
           .map(([param, value]) => (

@@ -1,151 +1,253 @@
-import React, { useState, useEffect } from "react";
-import { PlusCircleIcon, PencilIcon, TrashIcon, ChevronDownIcon, ChevronRightIcon } from "@heroicons/react/outline";
-import { setCallbacksCall } from "./networking";
-import { Card, Title, Text, Table, TableHead, TableHeaderCell, TableBody, TableRow, TableCell } from "@tremor/react";
+import React, { useEffect, useMemo, useState } from "react";
+import { ChevronDownIcon, ChevronRightIcon, PencilIcon, PlusCircleIcon, TrashIcon } from "@heroicons/react/outline";
+/* eslint-disable no-restricted-imports -- extends the existing alias-settings UI built on antd/tremor; migrating to shadcn is out of scope */
+import { Button, Popconfirm, Select, Switch, Tag } from "antd";
+import { Card, Table, TableBody, TableCell, TableHead, TableHeaderCell, TableRow, Text, Title } from "@tremor/react";
+/* eslint-enable no-restricted-imports */
+
 import NotificationsManager from "./molecules/notifications_manager";
+import { createModelGroupAliasCall, deleteModelGroupAliasCall, updateModelGroupAliasCall } from "./networking";
 
-type ModelGroupAliasValue = string | { model: string; hidden?: boolean };
-
-interface ModelGroupAliasSettingsProps {
-  accessToken: string;
-  initialModelGroupAlias?: Record<string, ModelGroupAliasValue>;
-  onAliasUpdate?: (updatedAlias: { [key: string]: string }) => void;
-}
+export type ModelGroupAliasValue = string | { model: string; hidden?: boolean; enabled?: boolean };
 
 interface AliasItem {
   id: string;
   aliasName: string;
   targetModelGroup: string;
+  hidden: boolean;
+  enabled: boolean;
+  isNew?: boolean;
+  isDeleted?: boolean;
 }
+
+interface ModelGroupAliasSettingsProps {
+  accessToken: string;
+  initialModelGroupAlias?: Record<string, ModelGroupAliasValue>;
+  availableModelGroups: string[];
+  canEdit: boolean;
+  isLoading?: boolean;
+  onAliasesChange?: (updatedAlias: Record<string, ModelGroupAliasValue>) => void;
+  onReload?: () => void;
+}
+
+const normalizeAliases = (input: Record<string, ModelGroupAliasValue>): AliasItem[] =>
+  Object.entries(input).map(([aliasName, value], index) => {
+    const isString = typeof value === "string";
+    const model = isString ? value : value?.model ?? "";
+    const hidden = isString ? false : Boolean(value?.hidden);
+    const enabled = isString ? true : value?.enabled !== false;
+    return {
+      id: `${index}-${aliasName}`,
+      aliasName,
+      targetModelGroup: model,
+      hidden,
+      enabled,
+    };
+  });
+
+const serializeAliases = (items: AliasItem[]): Record<string, ModelGroupAliasValue> =>
+  items
+    .filter((item) => !item.isDeleted)
+    .reduce<Record<string, ModelGroupAliasValue>>((acc, item) => {
+      acc[item.aliasName] = {
+        model: item.targetModelGroup,
+        hidden: item.hidden,
+        enabled: item.enabled,
+      };
+      return acc;
+    }, {});
+
+const discoveryLabel = (enabled: boolean, hidden: boolean): string => {
+  if (!enabled) {
+    return "Not listed while disabled";
+  }
+  return hidden ? "Hidden" : "Listed";
+};
 
 const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
   accessToken,
   initialModelGroupAlias = {},
-  onAliasUpdate,
+  availableModelGroups,
+  canEdit,
+  isLoading = false,
+  onAliasesChange,
+  onReload,
 }) => {
   const [aliases, setAliases] = useState<AliasItem[]>([]);
   const [newAlias, setNewAlias] = useState({ aliasName: "", targetModelGroup: "" });
   const [editingAlias, setEditingAlias] = useState<AliasItem | null>(null);
   const [isExpanded, setIsExpanded] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    const aliasArray = Object.entries(initialModelGroupAlias).map(([aliasName, value], index) => ({
-      id: `${index}-${aliasName}`,
-      aliasName,
-      // if object, use its model field; otherwise use the string
-      targetModelGroup: typeof value === "string" ? value : value?.model ?? "",
-    }));
-    setAliases(aliasArray);
+    setAliases(normalizeAliases(initialModelGroupAlias));
+    setEditingAlias(null);
   }, [initialModelGroupAlias]);
 
-  const saveAliasesToBackend = async (updatedAliases: AliasItem[]) => {
-    if (!accessToken) {
-      console.error("Access token is missing");
-      return false;
-    }
+  const targetOptions = useMemo(() => {
+    const existing = new Set(availableModelGroups);
+    const currentTargets = aliases.map((alias) => alias.targetModelGroup).filter(Boolean);
+    const options = new Set([...availableModelGroups, ...currentTargets]);
+    return Array.from(options)
+      .filter((option) => option && !aliases.some((alias) => alias.aliasName === option))
+      .map((option) => ({
+        label: existing.has(option) ? option : `${option} (invalid target)`,
+        value: option,
+      }));
+  }, [aliases, availableModelGroups]);
 
-    try {
-      // Convert array back to object format
-      const aliasObject: { [key: string]: string } = {};
-      updatedAliases.forEach((alias) => {
-        aliasObject[alias.aliasName] = alias.targetModelGroup;
-      });
+  const dirty = useMemo(() => {
+    const normalizedInitial = normalizeAliases(initialModelGroupAlias);
+    return JSON.stringify(normalizedInitial) !== JSON.stringify(aliases);
+  }, [aliases, initialModelGroupAlias]);
 
-      const payload = {
-        router_settings: {
-          model_group_alias: aliasObject,
-        },
-      };
+  const visibleAliases = aliases.filter((alias) => !alias.isDeleted);
 
-      await setCallbacksCall(accessToken, payload);
-
-      if (onAliasUpdate) {
-        onAliasUpdate(aliasObject);
-      }
-
-      return true;
-    } catch (error) {
-      console.error("Failed to save model group alias settings:", error);
-      NotificationsManager.fromBackend("Failed to save model group alias settings");
-      return false;
-    }
+  const updateAliases = (nextAliases: AliasItem[]) => {
+    setAliases(nextAliases);
+    onAliasesChange?.(serializeAliases(nextAliases));
   };
 
-  const handleAddAlias = async () => {
-    if (!newAlias.aliasName || !newAlias.targetModelGroup) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model group");
-      return;
+  const validateAlias = (alias: AliasItem) => {
+    const aliasName = alias.aliasName.trim();
+    const target = alias.targetModelGroup.trim();
+    if (!aliasName || !target) {
+      return "Please provide both alias name and target model group";
     }
-
-    // Check for duplicate alias names
-    if (aliases.some((alias) => alias.aliasName === newAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
-      return;
+    if (aliasName === target) {
+      return "Alias cannot point to itself";
     }
+    if (aliases.some((item) => item.id !== alias.id && !item.isDeleted && item.aliasName === aliasName)) {
+      return "An alias with this name already exists";
+    }
+    if (aliases.some((item) => item.aliasName === target)) {
+      return "Alias cannot point to another alias";
+    }
+    if (!availableModelGroups.includes(target)) {
+      return "Target model group is invalid";
+    }
+    return null;
+  };
 
-    const newAliasObj: AliasItem = {
+  const handleAddAlias = () => {
+    const candidate: AliasItem = {
       id: `${Date.now()}-${newAlias.aliasName}`,
-      aliasName: newAlias.aliasName,
+      aliasName: newAlias.aliasName.trim(),
       targetModelGroup: newAlias.targetModelGroup,
+      hidden: false,
+      enabled: true,
+      isNew: true,
     };
 
-    const updatedAliases = [...aliases, newAliasObj];
-
-    if (await saveAliasesToBackend(updatedAliases)) {
-      setAliases(updatedAliases);
-      setNewAlias({ aliasName: "", targetModelGroup: "" });
-      NotificationsManager.success("Alias added successfully");
+    const error = validateAlias(candidate);
+    if (error) {
+      NotificationsManager.fromBackend(error);
+      return;
     }
+
+    updateAliases([...aliases, candidate]);
+    setNewAlias({ aliasName: "", targetModelGroup: "" });
   };
 
   const handleEditAlias = (alias: AliasItem) => {
     setEditingAlias({ ...alias });
   };
 
-  const handleUpdateAlias = async () => {
-    if (!editingAlias) return;
-
-    if (!editingAlias.aliasName || !editingAlias.targetModelGroup) {
-      NotificationsManager.fromBackend("Please provide both alias name and target model group");
-      return;
-    }
-
-    // Check for duplicate alias names (excluding current alias)
-    if (aliases.some((alias) => alias.id !== editingAlias.id && alias.aliasName === editingAlias.aliasName)) {
-      NotificationsManager.fromBackend("An alias with this name already exists");
-      return;
-    }
-
-    const updatedAliases = aliases.map((alias) => (alias.id === editingAlias.id ? editingAlias : alias));
-
-    if (await saveAliasesToBackend(updatedAliases)) {
-      setAliases(updatedAliases);
-      setEditingAlias(null);
-      NotificationsManager.success("Alias updated successfully");
-    }
-  };
-
   const handleCancelEdit = () => {
     setEditingAlias(null);
   };
 
-  const deleteAlias = async (aliasId: string) => {
-    const updatedAliases = aliases.filter((alias) => alias.id !== aliasId);
+  const handleSaveEdit = () => {
+    if (!editingAlias) return;
+    const error = validateAlias(editingAlias);
+    if (error) {
+      NotificationsManager.fromBackend(error);
+      return;
+    }
+    const nextAliases = aliases.map((alias) => (alias.id === editingAlias.id ? editingAlias : alias));
+    updateAliases(nextAliases);
+    setEditingAlias(null);
+  };
 
-    if (await saveAliasesToBackend(updatedAliases)) {
-      setAliases(updatedAliases);
-      NotificationsManager.success("Alias deleted successfully");
+  const handleToggleAlias = (aliasId: string, updates: Partial<AliasItem>) => {
+    const nextAliases = aliases.map((alias) => (alias.id === aliasId ? { ...alias, ...updates } : alias));
+    updateAliases(nextAliases);
+  };
+
+  const handleDeleteAlias = (aliasId: string) => {
+    const nextAliases = aliases.map((alias) => (alias.id === aliasId ? { ...alias, isDeleted: true } : alias));
+    updateAliases(nextAliases);
+  };
+
+  const handleDiscard = () => {
+    setAliases(normalizeAliases(initialModelGroupAlias));
+    setEditingAlias(null);
+  };
+
+  const handleSaveAll = async () => {
+    if (!accessToken) {
+      NotificationsManager.fromBackend("Missing access token");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const initialItems = normalizeAliases(initialModelGroupAlias);
+      const initialByName = new Map(initialItems.map((item) => [item.aliasName, item]));
+      const currentByName = new Map(visibleAliases.map((item) => [item.aliasName, item]));
+
+      const deleted = initialItems.filter((item) => !currentByName.has(item.aliasName));
+      const created = visibleAliases.filter((item) => item.isNew || !initialByName.has(item.aliasName));
+      const updated = visibleAliases.filter((item) => {
+        const initial = initialByName.get(item.aliasName);
+        if (!initial) return false;
+        return (
+          initial.targetModelGroup !== item.targetModelGroup ||
+          initial.hidden !== item.hidden ||
+          initial.enabled !== item.enabled
+        );
+      });
+
+      for (const item of created) {
+        const createRequest = {
+          name: item.aliasName,
+          model: item.targetModelGroup,
+          hidden: item.hidden,
+          enabled: item.enabled,
+        };
+        await createModelGroupAliasCall(accessToken, createRequest);
+      }
+
+      for (const item of updated) {
+        await updateModelGroupAliasCall(accessToken, item.aliasName, {
+          model: item.targetModelGroup,
+          hidden: item.hidden,
+          enabled: item.enabled,
+        });
+      }
+
+      for (const item of deleted) {
+        await deleteModelGroupAliasCall(accessToken, item.aliasName);
+      }
+
+      NotificationsManager.success("Model group aliases saved");
+      onReload?.();
+    } catch (error) {
+      console.error("Failed to save model group alias settings:", error);
+      NotificationsManager.fromBackend("Failed to save model group alias settings");
+    } finally {
+      setIsSaving(false);
     }
   };
 
-  // Convert current aliases to object for config example
-  const aliasObject = aliases.reduce(
-    (acc, alias) => {
-      acc[alias.aliasName] = alias.targetModelGroup;
-      return acc;
-    },
-    {} as { [key: string]: string },
-  );
+  if (isLoading) {
+    return (
+      <Card className="mb-6">
+        <Title className="mb-2">Model Group Alias Settings</Title>
+        <Text className="text-sm text-gray-500">Loading aliases...</Text>
+      </Card>
+    );
+  }
 
   return (
     <Card className="mb-6">
@@ -170,7 +272,7 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
         <div className="mt-4">
           <div className="mb-6">
             <Text className="text-sm font-medium text-gray-700 mb-2">Add New Alias</Text>
-            <div className="grid grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Alias Name</label>
                 <input
@@ -184,28 +286,35 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                   }
                   placeholder="e.g., gpt-4o"
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  disabled={!canEdit}
                 />
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Target Model Group</label>
-                <input
-                  type="text"
-                  value={newAlias.targetModelGroup}
-                  onChange={(e) =>
+                <Select
+                  value={newAlias.targetModelGroup || undefined}
+                  onChange={(value) =>
                     setNewAlias({
                       ...newAlias,
-                      targetModelGroup: e.target.value,
+                      targetModelGroup: value,
                     })
                   }
-                  placeholder="e.g., gpt-4o-mini-openai"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm"
+                  options={targetOptions}
+                  showSearch
+                  placeholder="Select a model group"
+                  className="w-full"
+                  disabled={!canEdit}
                 />
               </div>
               <div className="flex items-end">
                 <button
                   onClick={handleAddAlias}
-                  disabled={!newAlias.aliasName || !newAlias.targetModelGroup}
-                  className={`flex items-center px-4 py-2 rounded-md text-sm ${!newAlias.aliasName || !newAlias.targetModelGroup ? "bg-gray-300 text-gray-500 cursor-not-allowed" : "bg-green-600 text-white hover:bg-green-700"}`}
+                  disabled={!canEdit || !newAlias.aliasName || !newAlias.targetModelGroup}
+                  className={`flex items-center px-4 py-2 rounded-md text-sm ${
+                    !canEdit || !newAlias.aliasName || !newAlias.targetModelGroup
+                      ? "bg-gray-300 text-gray-500 cursor-not-allowed"
+                      : "bg-green-600 text-white hover:bg-green-700"
+                  }`}
                 >
                   <PlusCircleIcon className="w-4 h-4 mr-1" />
                   Add Alias
@@ -222,11 +331,13 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                   <TableRow>
                     <TableHeaderCell className="py-1 h-8">Alias Name</TableHeaderCell>
                     <TableHeaderCell className="py-1 h-8">Target Model Group</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Status</TableHeaderCell>
+                    <TableHeaderCell className="py-1 h-8">Discovery</TableHeaderCell>
                     <TableHeaderCell className="py-1 h-8">Actions</TableHeaderCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {aliases.map((alias) => (
+                  {visibleAliases.map((alias) => (
                     <TableRow key={alias.id} className="h-8">
                       {editingAlias && editingAlias.id === alias.id ? (
                         <>
@@ -241,26 +352,60 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                                 })
                               }
                               className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                              disabled={!canEdit}
                             />
                           </TableCell>
                           <TableCell className="py-0.5">
-                            <input
-                              type="text"
-                              value={editingAlias.targetModelGroup}
-                              onChange={(e) =>
+                            <Select
+                              value={editingAlias.targetModelGroup || undefined}
+                              onChange={(value) =>
                                 setEditingAlias({
                                   ...editingAlias,
-                                  targetModelGroup: e.target.value,
+                                  targetModelGroup: value,
                                 })
                               }
-                              className="w-full px-2 py-1 border border-gray-300 rounded-md text-sm"
+                              options={targetOptions}
+                              showSearch
+                              className="w-full"
+                              disabled={!canEdit}
                             />
+                          </TableCell>
+                          <TableCell className="py-0.5">
+                            <Switch
+                              checked={editingAlias.enabled}
+                              onChange={(checked) =>
+                                setEditingAlias({
+                                  ...editingAlias,
+                                  enabled: checked,
+                                })
+                              }
+                              disabled={!canEdit}
+                            />
+                            <span className="ml-2 text-xs text-gray-500">
+                              {editingAlias.enabled ? "Enabled" : "Disabled"}
+                            </span>
+                          </TableCell>
+                          <TableCell className="py-0.5">
+                            <Switch
+                              checked={!editingAlias.hidden}
+                              onChange={(checked) =>
+                                setEditingAlias({
+                                  ...editingAlias,
+                                  hidden: !checked,
+                                })
+                              }
+                              disabled={!canEdit || !editingAlias.enabled}
+                            />
+                            <span className="ml-2 text-xs text-gray-500">
+                              {discoveryLabel(editingAlias.enabled, editingAlias.hidden)}
+                            </span>
                           </TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             <div className="flex space-x-2">
                               <button
-                                onClick={handleUpdateAlias}
+                                onClick={handleSaveEdit}
                                 className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
+                                disabled={!canEdit}
                               >
                                 Save
                               </button>
@@ -276,30 +421,65 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
                       ) : (
                         <>
                           <TableCell className="py-0.5 text-sm text-gray-900">{alias.aliasName}</TableCell>
-                          <TableCell className="py-0.5 text-sm text-gray-500">{alias.targetModelGroup}</TableCell>
+                          <TableCell className="py-0.5 text-sm text-gray-500">
+                            {alias.targetModelGroup}
+                            {!availableModelGroups.includes(alias.targetModelGroup) && (
+                              <Tag color="orange" className="ml-2">
+                                Invalid target
+                              </Tag>
+                            )}
+                          </TableCell>
+                          <TableCell className="py-0.5">
+                            <Switch
+                              checked={alias.enabled}
+                              onChange={(checked) => handleToggleAlias(alias.id, { enabled: checked })}
+                              disabled={!canEdit}
+                            />
+                            <span className="ml-2 text-xs text-gray-500">{alias.enabled ? "Enabled" : "Disabled"}</span>
+                          </TableCell>
+                          <TableCell className="py-0.5">
+                            <Switch
+                              checked={!alias.hidden}
+                              onChange={(checked) => handleToggleAlias(alias.id, { hidden: !checked })}
+                              disabled={!canEdit || !alias.enabled}
+                            />
+                            <span className="ml-2 text-xs text-gray-500">
+                              {discoveryLabel(alias.enabled, alias.hidden)}
+                            </span>
+                          </TableCell>
                           <TableCell className="py-0.5 whitespace-nowrap">
                             <div className="flex space-x-2">
                               <button
                                 onClick={() => handleEditAlias(alias)}
                                 className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded-sm hover:bg-blue-100"
+                                disabled={!canEdit}
                               >
                                 <PencilIcon className="w-3 h-3" />
                               </button>
-                              <button
-                                onClick={() => deleteAlias(alias.id)}
-                                className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-sm hover:bg-red-100"
+                              <Popconfirm
+                                title="Delete alias"
+                                description="Deleting removes the alias permanently. Disable it if you want to keep the configuration."
+                                okText="Delete"
+                                cancelText="Cancel"
+                                onConfirm={() => handleDeleteAlias(alias.id)}
+                                disabled={!canEdit}
                               >
-                                <TrashIcon className="w-3 h-3" />
-                              </button>
+                                <button
+                                  className="text-xs bg-red-50 text-red-600 px-2 py-1 rounded-sm hover:bg-red-100"
+                                  disabled={!canEdit}
+                                >
+                                  <TrashIcon className="w-3 h-3" />
+                                </button>
+                              </Popconfirm>
                             </div>
                           </TableCell>
                         </>
                       )}
                     </TableRow>
                   ))}
-                  {aliases.length === 0 && (
+                  {visibleAliases.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={3} className="py-0.5 text-sm text-gray-500 text-center">
+                      <TableCell colSpan={5} className="py-0.5 text-sm text-gray-500 text-center">
                         No aliases added yet. Add a new alias above.
                       </TableCell>
                     </TableRow>
@@ -309,33 +489,16 @@ const ModelGroupAliasSettings: React.FC<ModelGroupAliasSettingsProps> = ({
             </div>
           </div>
 
-          {/* Configuration Example */}
-          <Card>
-            <Title className="mb-4">Configuration Example</Title>
-            <Text className="text-gray-600 mb-4">
-              Here&apos;s how your current aliases would look in the config.yaml:
-            </Text>
-            <div className="bg-gray-100 rounded-lg p-4 font-mono text-sm">
-              <div className="text-gray-700">
-                router_settings:
-                <br />
-                &nbsp;&nbsp;model_group_alias:
-                {Object.keys(aliasObject).length === 0 ? (
-                  <span className="text-gray-500">
-                    <br />
-                    &nbsp;&nbsp;&nbsp;&nbsp;# No aliases configured yet
-                  </span>
-                ) : (
-                  Object.entries(aliasObject).map(([key, value]) => (
-                    <span key={key}>
-                      <br />
-                      &nbsp;&nbsp;&nbsp;&nbsp;&quot;{key}&quot;: &quot;{value}&quot;
-                    </span>
-                  ))
-                )}
-              </div>
+          {canEdit && (
+            <div className="flex items-center justify-end gap-3">
+              <Button onClick={handleDiscard} disabled={!dirty || isSaving}>
+                Discard
+              </Button>
+              <Button type="primary" onClick={handleSaveAll} disabled={!dirty || isSaving} loading={isSaving}>
+                Save changes
+              </Button>
             </div>
-          </Card>
+          )}
         </div>
       )}
     </Card>

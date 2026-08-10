@@ -11457,6 +11457,42 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/router/model-group-aliases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Model Group Aliases */
+        get: operations["list_model_group_aliases_router_model_group_aliases_get"];
+        put?: never;
+        /** Create Model Group Alias */
+        post: operations["create_model_group_alias_router_model_group_aliases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/router/model-group-aliases/{alias_name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Model Group Alias */
+        delete: operations["delete_model_group_alias_router_model_group_aliases__alias_name__delete"];
+        options?: never;
+        head?: never;
+        /** Update Model Group Alias */
+        patch: operations["update_model_group_alias_router_model_group_aliases__alias_name__patch"];
+        trace?: never;
+    };
     "/router/settings": {
         parameters: {
             query?: never;
@@ -28091,6 +28127,70 @@ export interface components {
                 [key: string]: string | string[];
             };
         };
+        /** ModelGroupAliasCreateRequest */
+        ModelGroupAliasCreateRequest: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+        };
+        /** ModelGroupAliasDeleteResponse */
+        ModelGroupAliasDeleteResponse: {
+            /** Message */
+            message: string;
+            /** Name */
+            name: string;
+        };
+        /** ModelGroupAliasItemResponse */
+        ModelGroupAliasItemResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Hidden */
+            hidden: boolean;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+        };
+        /** ModelGroupAliasListResponse */
+        ModelGroupAliasListResponse: {
+            /** Aliases */
+            aliases: components["schemas"]["ModelGroupAliasItemResponse"][];
+            /** Can Edit */
+            can_edit: boolean;
+        };
+        /** ModelGroupAliasResponse */
+        ModelGroupAliasResponse: {
+            /** Enabled */
+            enabled: boolean;
+            /** Hidden */
+            hidden: boolean;
+            /** Message */
+            message: string;
+            /** Model */
+            model: string;
+            /** Name */
+            name: string;
+        };
+        /** ModelGroupAliasUpdateRequest */
+        ModelGroupAliasUpdateRequest: {
+            /** Enabled */
+            enabled?: boolean | null;
+            /** Hidden */
+            hidden?: boolean | null;
+            /** Model */
+            model?: string | null;
+        };
         /** ModelGroupInfoProxy */
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
@@ -31029,6 +31129,15 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** RouterModelGroupAliasItem */
+        RouterModelGroupAliasItem: {
+            /** Enabled */
+            enabled?: boolean;
+            /** Hidden */
+            hidden?: boolean;
+            /** Model */
+            model: string;
+        };
         /** RouterSettingsField */
         RouterSettingsField: {
             /** Field Default */
@@ -33088,14 +33197,9 @@ export interface components {
             model_group_affinity_config?: {
                 [key: string]: string[];
             } | null;
-            /**
-             * Model Group Alias
-             * @default {}
-             */
-            model_group_alias: {
-                [key: string]: string | {
-                    [key: string]: unknown;
-                };
+            /** Model Group Alias */
+            model_group_alias?: {
+                [key: string]: string | components["schemas"]["RouterModelGroupAliasItem"];
             } | null;
             /** Model Group Retry Policy */
             model_group_retry_policy?: {
@@ -48725,6 +48829,125 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["RouterFieldsResponse"];
+                };
+            };
+        };
+    };
+    list_model_group_aliases_router_model_group_aliases_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelGroupAliasListResponse"];
+                };
+            };
+        };
+    };
+    create_model_group_alias_router_model_group_aliases_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelGroupAliasCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelGroupAliasResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_model_group_alias_router_model_group_aliases__alias_name__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alias_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelGroupAliasDeleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_model_group_alias_router_model_group_aliases__alias_name__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                alias_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ModelGroupAliasUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelGroupAliasResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

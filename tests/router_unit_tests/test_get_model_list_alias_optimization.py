@@ -48,3 +48,32 @@ def test_map_team_model_should_not_iterate_aliases_for_non_alias_team_model_name
     # so the router can find all sibling deployments via team_id filtering
     result = router.map_team_model(team_model_name="team-model", team_id="team-1")
     assert result == "team-model", f"Expected public name 'team-model', got {result}"
+
+
+def test_model_group_alias_disabled_and_hidden_semantics():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "gpt-5-mini",
+                "litellm_params": {"model": "gpt-5-mini"},
+            }
+        ],
+        model_group_alias={
+            "listed-alias": {"model": "gpt-5-mini", "hidden": False, "enabled": True},
+            "hidden-alias": {"model": "gpt-5-mini", "hidden": True, "enabled": True},
+            "disabled-alias": {"model": "gpt-5-mini", "hidden": False, "enabled": False},
+        },
+    )
+
+    model_names = router.get_model_names()
+    assert "listed-alias" in model_names
+    assert "hidden-alias" not in model_names
+    assert "disabled-alias" not in model_names
+
+    assert router._get_model_from_alias("listed-alias") == "gpt-5-mini"
+    assert router._get_model_from_alias("hidden-alias") == "gpt-5-mini"
+    assert router._get_model_from_alias("disabled-alias") is None
+
+    assert router.get_model_group_info("disabled-alias") is None
+    assert router.get_model_group_info("hidden-alias") is None
+    assert router.get_model_group_info("listed-alias") is not None

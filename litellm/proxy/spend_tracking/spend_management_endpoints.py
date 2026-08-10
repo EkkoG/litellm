@@ -1766,11 +1766,11 @@ async def calculate_spend(request: SpendCalculateRequest):
             cost_per_token: CostPerToken | None = None
             if llm_router is not None:
                 if llm_router.model_group_alias is not None and request.model in llm_router.model_group_alias:
-                    # lookup alias in llm_router
-                    _model_group_name = llm_router.model_group_alias[request.model]
-                    for model in llm_router.model_list:
-                        if model.get("model_name") == _model_group_name:
-                            _model_in_llm_router = model
+                    alias_resolution = llm_router.resolve_model_group_alias(request.model)
+                    if alias_resolution.kind == "active" and alias_resolution.model:
+                        for model in llm_router.model_list:
+                            if model.get("model_name") == alias_resolution.model:
+                                _model_in_llm_router = model
 
                 else:
                     # no model_group aliases set -> try finding model in llm_router

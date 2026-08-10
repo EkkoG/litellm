@@ -3392,6 +3392,32 @@ export const setCallbacksCall = async (accessToken: string, formValues: Record<s
   }
 };
 
+export const getModelGroupAliasesCall = async (accessToken: string) => {
+  return apiClient.get(`/router/model-group-aliases`, { accessToken });
+};
+
+export const createModelGroupAliasCall = async (
+  accessToken: string,
+  payload: { name: string; model: string; hidden?: boolean; enabled?: boolean },
+) => {
+  return apiClient.post(`/router/model-group-aliases`, { accessToken, body: payload });
+};
+
+export const updateModelGroupAliasCall = async (
+  accessToken: string,
+  aliasName: string,
+  payload: { model?: string; hidden?: boolean; enabled?: boolean },
+) => {
+  return apiClient.patch(`/router/model-group-aliases/${encodeURIComponent(aliasName)}`, {
+    accessToken,
+    body: payload,
+  });
+};
+
+export const deleteModelGroupAliasCall = async (accessToken: string, aliasName: string) => {
+  return apiClient.delete(`/router/model-group-aliases/${encodeURIComponent(aliasName)}`, { accessToken });
+};
+
 export const individualModelHealthCheckCall = async (accessToken: string, modelId: string) => {
   /**
    * Run health check for a specific model using model ID (so each deployment is checked separately).

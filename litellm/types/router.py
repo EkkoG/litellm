@@ -4,6 +4,7 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import (
     Any,
@@ -127,7 +128,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: Optional[float] = None
     fallbacks: Optional[List[dict]] = None
     context_window_fallbacks: Optional[List[dict]] = None
-    model_group_alias: Optional[Dict[str, Union[str, Dict]]] = {}
+    model_group_alias: Mapping[str, Union[str, "RouterModelGroupAliasItem"]] | None = None
     enable_tag_filtering: Optional[bool] = None
 
     model_config = ConfigDict(protected_namespaces=())
@@ -743,9 +744,10 @@ class RouterRateLimitError(ValueError):
         super().__init__(_message)
 
 
-class RouterModelGroupAliasItem(TypedDict):
-    model: str
+class RouterModelGroupAliasItem(TypedDict, total=False):
+    model: Required[str]
     hidden: bool  # if 'True', don't return on `.get_model_list`
+    enabled: bool  # if 'False', don't route requests
 
 
 VALID_LITELLM_ENVIRONMENTS = [

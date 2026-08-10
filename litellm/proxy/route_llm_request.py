@@ -594,9 +594,22 @@ async def route_request(
             )
             or data["model"] in router_model_names
             or llm_router.has_model_id(data["model"])
-            or llm_router.model_group_alias is not None
-            and data["model"] in llm_router.model_group_alias
         ):
+            return getattr(llm_router, f"{route_type}")(**data)
+
+        elif llm_router.model_group_alias is not None and data["model"] in llm_router.model_group_alias:
+            alias_resolution = llm_router.resolve_model_group_alias(data["model"])
+            if alias_resolution.kind == "disabled":
+                raise litellm.PermissionDeniedError(
+                    message="Model group alias is disabled",
+                    model=data["model"],
+                    llm_provider="",
+                )
+            if alias_resolution.kind == "invalid":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={"error": alias_resolution.reason or "Invalid model group alias configuration"},
+                )
             return getattr(llm_router, f"{route_type}")(**data)
 
         elif data["model"] not in router_model_names:

@@ -20,7 +20,9 @@ import time
 import traceback
 from collections import defaultdict
 from collections.abc import AsyncGenerator, Callable, Generator, Mapping
+from dataclasses import dataclass
 from functools import lru_cache
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -222,6 +224,15 @@ from litellm.utils import (
 
 from .router_utils.pattern_match_deployments import PatternMatchRouter
 
+
+@dataclass(frozen=True, slots=True)
+class ModelGroupAliasResolution:
+    kind: Literal["active", "disabled", "invalid", "none"]
+    model: str | None = None
+    hidden: bool = False
+    reason: str | None = None
+
+
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
@@ -355,7 +366,7 @@ class Router:
         fallbacks: list = [],
         context_window_fallbacks: list = [],
         content_policy_fallbacks: list = [],
-        model_group_alias: dict[str, str | RouterModelGroupAliasItem] | None = {},
+        model_group_alias: Mapping[str, str | RouterModelGroupAliasItem] | None = None,
         enable_pre_call_checks: bool = False,
         enable_tag_filtering: bool = False,
         tag_filtering_match_any: bool = True,
@@ -541,10 +552,9 @@ class Router:
         self.routing_plugins: list[RoutingPlugin] = list(plugins) if plugins else []
 
         # Initialize model_group_alias early since it's used in set_model_list
-        self.model_group_alias: dict[str, str | RouterModelGroupAliasItem] = (
-            model_group_alias or {}
-        )  # dict to store aliases for router, ex. {"gpt-4": "gpt-3.5-turbo"}, all requests with gpt-4 -> get routed to gpt-3.5-turbo group
-
+        self.model_group_alias: Mapping[str, str | RouterModelGroupAliasItem] = (
+            MappingProxyType({**model_group_alias}) if model_group_alias is not None else MappingProxyType({})
+        )
         # Initialize model ID to deployment index mapping for O(1) lookups
         self.model_id_to_deployment_index_map: dict[str, int] = {}
         # Initialize model name to deployment indices mapping for O(1) lookups
@@ -9168,6 +9178,39 @@ class Router:
 
         return model_group_info
 
+    def resolve_model_group_alias(self, model: str) -> ModelGroupAliasResolution:
+        """
+        Resolve a model group alias into a normalized resolution.
+        """
+        if model not in self.model_group_alias:
+            return ModelGroupAliasResolution(kind="none")
+
+        _item = self.model_group_alias[model]
+        if isinstance(_item, str):
+            return ModelGroupAliasResolution(kind="active", model=_item)
+
+        if not isinstance(_item, dict):
+            return ModelGroupAliasResolution(kind="invalid", reason="model group alias must be a string or object")
+
+        target_model = _item.get("model")
+        if not isinstance(target_model, str) or not target_model:
+            return ModelGroupAliasResolution(
+                kind="invalid",
+                reason="model group alias requires a non-empty 'model'",
+            )
+
+        enabled = _item.get("enabled", True)
+        hidden = _item.get("hidden", False)
+
+        if enabled is False:
+            return ModelGroupAliasResolution(kind="disabled", model=target_model, hidden=bool(hidden))
+
+        return ModelGroupAliasResolution(kind="active", model=target_model, hidden=bool(hidden))
+
+    def set_model_group_aliases(self, aliases: Mapping[str, str | RouterModelGroupAliasItem]) -> None:
+        self.model_group_alias = MappingProxyType({**aliases})
+        self._invalidate_model_group_info_cache()
+
     def get_model_group_info(self, model_group: str) -> ModelGroupInfo | None:
         """
         For a given model group name, return the combined model info
@@ -9178,19 +9221,12 @@ class Router:
         """
         ## Check if model group alias
         if model_group in self.model_group_alias:
-            item = self.model_group_alias[model_group]
-            if isinstance(item, str):
-                _router_model_group = item
-            elif isinstance(item, dict):
-                if item["hidden"] is True:
-                    return None
-                else:
-                    _router_model_group = item["model"]
-            else:
+            resolution = self.resolve_model_group_alias(model=model_group)
+            if resolution.kind != "active" or resolution.hidden or resolution.model is None:
                 return None
 
             return self._set_model_group_info(
-                model_group=_router_model_group,
+                model_group=resolution.model,
                 user_facing_model_group_name=model_group,
             )
 
@@ -9824,23 +9860,16 @@ class Router:
             # Fast path: direct dict lookup avoids scanning all aliases for non-alias model names.
             if model_name not in self.model_group_alias:
                 return returned_models
-            alias_items = [(model_name, self.model_group_alias[model_name])]
+            alias_items = ((model_name, self.model_group_alias[model_name]),)
         else:
-            alias_items = list(self.model_group_alias.items())
+            alias_items = tuple(self.model_group_alias.items())
 
         for model_alias, model_value in alias_items:
-            if isinstance(model_value, str):
-                _router_model_name: str = model_value
-            elif isinstance(model_value, dict):
-                _model_value = RouterModelGroupAliasItem(**model_value)  # type: ignore
-                if _model_value["hidden"] is True:
-                    continue
-                else:
-                    _router_model_name = _model_value["model"]
-            else:
+            resolution = self.resolve_model_group_alias(model=model_alias)
+            if resolution.kind != "active" or resolution.hidden or resolution.model is None:
                 continue
 
-            returned_models.extend(self._get_all_deployments(model_name=_router_model_name, model_alias=model_alias))
+            returned_models.extend(self._get_all_deployments(model_name=resolution.model, model_alias=model_alias))
 
         return returned_models
 
@@ -10335,16 +10364,11 @@ class Router:
         - str, the litellm model name
         - None, if model is not in model group alias
         """
-        if model not in self.model_group_alias:
+        resolution = self.resolve_model_group_alias(model=model)
+        if resolution.kind != "active":
             return None
 
-        _item = self.model_group_alias[model]
-        if isinstance(_item, str):
-            model = _item
-        else:
-            model = _item["model"]
-
-        return model
+        return resolution.model
 
     def _get_deployment_by_litellm_model(self, model: str) -> list:
         """

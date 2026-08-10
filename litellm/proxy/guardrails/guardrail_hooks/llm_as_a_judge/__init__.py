@@ -170,7 +170,8 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         ]
         router = self._router_provider()
         if router is not None and (
-            self.judge_model in router.model_group_alias or router.get_model_list(model_name=self.judge_model)
+            router.resolve_model_group_alias(self.judge_model).kind == "active"
+            or router.get_model_list(model_name=self.judge_model)
         ):
             response = await router.acompletion(
                 model=self.judge_model,

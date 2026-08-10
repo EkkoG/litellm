@@ -2147,7 +2147,7 @@ async def test_model_info_alias_without_prisma(hidden):
 
     assert alias_found is (not hidden)
 
-    
+
 @pytest.mark.parametrize("hidden", [True, False])
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Requires reliable external DB connection (prisma).")
@@ -2994,6 +2994,151 @@ async def test_update_config_success_callback_normalization():
     assert "sQs" not in callbacks
     # Existing callback should still be present
     assert "langfuse" in callbacks
+
+
+@pytest.mark.asyncio
+async def test_update_config_router_settings_does_not_clear_model_group_alias():
+    """
+    Partial router_settings updates must not implicitly clear model_group_alias.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import ConfigYAML, LitellmUserRoles, UserAPIKeyAuth
+
+    setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    existing_router_settings = {
+        "model_group_alias": {
+            "gpt-4o": {"model": "gpt-4o-prod", "hidden": True},
+        },
+        "timeout": 10,
+    }
+
+    class FakeRow:
+        def __init__(self, name, value):
+            self.param_name = name
+            self.param_value = value
+
+    upserted = {}
+
+    async def fake_find_first(where=None):
+        if where and where.get("param_name") == "router_settings":
+            return FakeRow("router_settings", existing_router_settings)
+        return None
+
+    async def fake_upsert(where=None, data=None):
+        upserted[where["param_name"]] = json.loads(data["update"]["param_value"])
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_config = MagicMock()
+            self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
+            self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
+
+    setattr(proxy_server, "prisma_client", MockPrisma())
+
+    class MockProxyConfig:
+        async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
+            return None
+
+    setattr(proxy_server, "proxy_config", MockProxyConfig())
+
+    config_update = ConfigYAML(router_settings={"num_retries": 3})
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
+    await proxy_server.update_config(config_update, user_api_key_dict=admin_user)
+
+    assert "router_settings" in upserted
+    assert upserted["router_settings"]["num_retries"] == 3
+    assert (
+        upserted["router_settings"]["model_group_alias"]
+        == existing_router_settings["model_group_alias"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_model_group_alias_crud_endpoints():
+    """
+    Dedicated model group alias endpoints should create, update, and delete aliases.
+    """
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.router_settings_endpoints import (
+        ModelGroupAliasCreateRequest,
+        ModelGroupAliasUpdateRequest,
+        create_model_group_alias,
+        delete_model_group_alias,
+        update_model_group_alias,
+    )
+
+    setattr(proxy_server, "proxy_logging_obj", MagicMock())
+
+    router_settings = {"model_group_alias": {}}
+
+    class FakeRow:
+        def __init__(self, name, value):
+            self.param_name = name
+            self.param_value = value
+
+    async def fake_find_first(where=None):
+        if where and where.get("param_name") == "router_settings":
+            return FakeRow("router_settings", router_settings)
+        return None
+
+    async def fake_upsert(where=None, data=None):
+        router_settings.update(json.loads(data["update"]["param_value"]))
+
+    class MockPrisma:
+        def __init__(self):
+            self.db = MagicMock()
+            self.db.litellm_config = MagicMock()
+            self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
+            self.db.litellm_config.find_unique = AsyncMock(side_effect=fake_find_first)
+            self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
+
+    setattr(proxy_server, "prisma_client", MockPrisma())
+
+    class MockProxyConfig:
+        async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):
+            return None
+
+    setattr(proxy_server, "proxy_config", MockProxyConfig())
+
+    router = litellm.Router(
+        model_list=[
+            {"model_name": "gpt-4o-prod", "litellm_params": {"model": "gpt-4o"}},
+        ],
+        model_group_alias={},
+    )
+    setattr(proxy_server, "llm_router", router)
+
+    admin_user = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test"
+    )
+
+    create_resp = await create_model_group_alias(
+        ModelGroupAliasCreateRequest(
+            name="alias-1", model="gpt-4o-prod", hidden=True, enabled=True
+        ),
+        user_api_key_dict=admin_user,
+    )
+    assert create_resp.name == "alias-1"
+    assert router_settings["model_group_alias"]["alias-1"]["hidden"] is True
+
+    update_resp = await update_model_group_alias(
+        "alias-1",
+        ModelGroupAliasUpdateRequest(enabled=False),
+        user_api_key_dict=admin_user,
+    )
+    assert update_resp.enabled is False
+    assert router_settings["model_group_alias"]["alias-1"]["enabled"] is False
+
+    delete_resp = await delete_model_group_alias(
+        "alias-1", user_api_key_dict=admin_user
+    )
+    assert delete_resp.name == "alias-1"
+    assert "alias-1" not in router_settings["model_group_alias"]
 
 
 @pytest.mark.parametrize(
