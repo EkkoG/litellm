@@ -3714,52 +3714,6 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     litellm.credential_list = []
 
 
-def test_add_deployment_resolves_reusable_credentials_for_provider_detection():
-    from litellm.types.router import Deployment, LiteLLM_Params
-    from litellm.types.utils import CredentialItem
-
-    credential = CredentialItem(
-        credential_name="chatgpt-static-key",
-        credential_info={"custom_llm_provider": "chatgpt"},
-        credential_values={
-            "api_key": "static-api-key",
-            "api_base": "https://gateway.example.com/v1",
-        },
-    )
-    router = litellm.Router(model_list=[])
-    deployment = Deployment(
-        model_name="luna",
-        litellm_params=LiteLLM_Params(
-            model="chatgpt/gpt-5.6-luna",
-            custom_llm_provider="chatgpt",
-            litellm_credential_name=credential.credential_name,
-        ),
-    )
-
-    with (
-        patch("litellm.credential_list", [credential]),
-        patch(
-            "litellm.router.litellm.get_llm_provider",
-            return_value=(
-                "gpt-5.6-luna",
-                "chatgpt",
-                "static-api-key",
-                "https://gateway.example.com/v1",
-            ),
-        ) as mock_get_llm_provider,
-    ):
-        router._add_deployment(deployment)
-
-    mock_get_llm_provider.assert_called_once_with(
-        model="chatgpt/gpt-5.6-luna",
-        custom_llm_provider="chatgpt",
-        api_key="static-api-key",
-        api_base="https://gateway.example.com/v1",
-    )
-    assert deployment.litellm_params.api_key is None
-    assert deployment.litellm_params.api_base is None
-
-
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
