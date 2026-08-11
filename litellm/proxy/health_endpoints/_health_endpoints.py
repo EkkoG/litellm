@@ -43,6 +43,7 @@ from litellm.proxy.middleware.in_flight_requests_middleware import (
     get_in_flight_requests,
 )
 from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+from litellm.utils import load_credentials_from_list
 
 #### Health ENDPOINTS ####
 
@@ -1856,6 +1857,7 @@ async def test_model_connection(
         # Merge: config params (from proxy config) as base, request params override
         # This allows users to override specific params while using config for credentials
         litellm_params = {**config_litellm_params, **request_litellm_params}
+        load_credentials_from_list(litellm_params)
 
         ## Auth check
         auth_model_info = loaded_model_info if loaded_model_info is not None else model_info
@@ -1870,9 +1872,11 @@ async def test_model_connection(
             premium_user=premium_user,
         )
         # Include health_check_params if provided
+        health_check_model_info = dict(auth_model_info or {})
+        if mode is not None:
+            health_check_model_info.setdefault("mode", mode)
         litellm_params = _update_litellm_params_for_health_check(
-            model_info={},
-            litellm_params=litellm_params,
+            model_info=health_check_model_info, litellm_params=litellm_params
         )
         mode = mode or litellm_params.pop("mode", None)
 
