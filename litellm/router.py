@@ -8058,6 +8058,16 @@ class Router:
             dynamic_api_key = None
             api_base = None
         else:
+            credential_values: dict[str, Any] = {}
+            credential_name = deployment.litellm_params.litellm_credential_name
+            if credential_name is not None:
+                credential_values = CredentialAccessor.get_credential_values(credential_name)
+            provider_api_key = deployment.litellm_params.api_key
+            if provider_api_key is None:
+                provider_api_key = credential_values.get("api_key")
+            provider_api_base = deployment.litellm_params.api_base
+            if provider_api_base is None:
+                provider_api_base = credential_values.get("api_base")
             # check if model provider in supported providers
             (
                 _model,
@@ -8067,6 +8077,8 @@ class Router:
             ) = litellm.get_llm_provider(
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
+                api_key=provider_api_key,
+                api_base=provider_api_base,
             )
             # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured

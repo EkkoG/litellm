@@ -769,6 +769,7 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
         mock_proxy_config.get_credentials.assert_not_called()
 
     # Now test with store_model_in_db = True
+    mock_proxy_config.reset_mock()
     with (
         patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
         patch("litellm.proxy.proxy_server.store_model_in_db", True),
@@ -785,6 +786,12 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
         # Verify get_credentials was called both directly and scheduled
         assert mock_proxy_config.get_credentials.call_count == 1  # Direct call
+        direct_reload_calls = [
+            mock_call[0]
+            for mock_call in mock_proxy_config.mock_calls
+            if mock_call[0] in {"get_credentials", "add_deployment"}
+        ]
+        assert direct_reload_calls[:2] == ["get_credentials", "add_deployment"]
 
         # Verify a scheduled job was added for get_credentials
         mock_scheduler_calls = [
