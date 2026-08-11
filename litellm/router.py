@@ -8057,11 +8057,6 @@ class Router:
             custom_llm_provider = None
             dynamic_api_key = None
             api_base = None
-        elif litellm_model.startswith("chatgpt/") or deployment.litellm_params.custom_llm_provider == "chatgpt":
-            _model = litellm_model.removeprefix("chatgpt/")
-            custom_llm_provider = "chatgpt"
-            dynamic_api_key = None
-            api_base = deployment.litellm_params.api_base
         else:
             # check if model provider in supported providers
             (
@@ -8073,8 +8068,7 @@ class Router:
                 model=deployment.litellm_params.model,
                 custom_llm_provider=deployment.litellm_params.get("custom_llm_provider", None),
             )
-
-        if not is_prompt_management_model:
+            # done reading model["litellm_params"]
             # Check if provider is supported: either in enum or JSON-configured
             if custom_llm_provider not in litellm.provider_list and not JSONProviderRegistry.exists(
                 custom_llm_provider
