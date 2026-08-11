@@ -801,6 +801,37 @@ async def test_initialize_scheduled_jobs_credentials(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_get_credentials_hydrates_db_credentials_before_config_cleanup():
+    from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.types.utils import CredentialItem
+
+    credential = CredentialItem(
+        credential_name="persisted-credential",
+        credential_values={"api_key": "stored-key"},
+        credential_info={},
+    )
+    repository = MagicMock()
+    repository.find_all = AsyncMock(return_value=[credential])
+    proxy_config = ProxyConfig()
+    proxy_config.delete_credentials = AsyncMock(side_effect=RuntimeError("config unavailable"))
+
+    with (
+        patch("litellm.credential_list", []),
+        patch(
+            "litellm.proxy.proxy_server.CredentialsRepository",
+            return_value=repository,
+        ),
+    ):
+        result = await proxy_config.get_credentials(MagicMock())
+        loaded_credentials = list(litellm.credential_list)
+
+    assert result == [credential]
+    assert [item.credential_name for item in loaded_credentials] == [
+        credential.credential_name
+    ]
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
     The DB config-reload jobs (add_deployment, get_credentials) that keep multi-pod
