@@ -836,3 +836,46 @@ async def test_health_check_with_custom_llm_provider():
         # Should succeed without "LLM Provider NOT provided" error
         assert "error" not in response
         assert isinstance(response, dict)
+
+
+@pytest.mark.asyncio
+async def test_chatgpt_health_check_uses_selected_static_credential_without_login():
+    from unittest.mock import MagicMock
+
+    from litellm.types.utils import CredentialItem
+
+    credential = CredentialItem(
+        credential_name="chatgpt-static-key",
+        credential_info={"custom_llm_provider": "chatgpt"},
+        credential_values={
+            "api_key": "static-api-key",
+            "api_base": "https://gateway.example.com/backend-api/codex",
+        },
+    )
+    mock_response = MagicMock()
+    mock_response._hidden_params = {"headers": {}}
+
+    with (
+        patch("litellm.credential_list", [credential]),
+        patch(
+            "litellm.llms.chatgpt.authenticator.Authenticator.get_access_token",
+            side_effect=AssertionError("local login must not run"),
+        ) as mock_get_access_token,
+        patch("litellm.aresponses", AsyncMock(return_value=mock_response)) as mock_responses,
+    ):
+        response = await litellm.ahealth_check(
+            model_params={
+                "model": "chatgpt/gpt-5.6-luna",
+                "custom_llm_provider": "chatgpt",
+                "litellm_credential_name": credential.credential_name,
+            },
+            mode="responses",
+            prompt="test from litellm",
+        )
+
+    assert "error" not in response
+    mock_get_access_token.assert_not_called()
+    mock_responses.assert_awaited_once()
+    request = mock_responses.await_args.kwargs
+    assert request["api_key"] == "static-api-key"
+    assert request["api_base"] == "https://gateway.example.com/backend-api/codex"

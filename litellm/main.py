@@ -57,6 +57,7 @@ from litellm.utils import (
     exception_type,
     get_litellm_params,
     get_optional_params,
+    load_credentials_from_list,
     peek_reasoning_summary_aliases,
     strip_reasoning_summary_aliases_from_optional_params,
 )
@@ -8227,6 +8228,8 @@ async def ahealth_check(
     """
     from litellm.litellm_core_utils.cached_imports import get_litellm_logging_class
     from litellm.litellm_core_utils.health_check_helpers import HealthCheckHelpers
+
+    load_credentials_from_list(model_params)
 
     # Use cached import helper to lazy-load Logging class (only loads when function is called)
     Logging = get_litellm_logging_class()
