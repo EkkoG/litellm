@@ -1,5 +1,6 @@
 from unittest.mock import MagicMock, patch
 
+import litellm
 import pytest
 
 from litellm.exceptions import AuthenticationError
@@ -7,6 +8,60 @@ from litellm.llms.chatgpt.chat.transformation import ChatGPTConfig
 
 
 class TestChatGPTConfig:
+    @patch("litellm.llms.chatgpt.chat.transformation.Authenticator")
+    def test_provider_info_defers_device_authentication(self, mock_authenticator_class: MagicMock) -> None:
+        mock_authenticator = mock_authenticator_class.return_value
+        mock_authenticator.get_api_base.return_value = "https://chatgpt.example.com/backend-api/codex"
+
+        api_base, api_key, provider = ChatGPTConfig()._get_openai_compatible_provider_info(
+            model="gpt-5.6-sol",
+            api_base=None,
+            api_key=None,
+            custom_llm_provider="chatgpt",
+        )
+
+        assert api_base == "https://chatgpt.example.com/backend-api/codex"
+        assert api_key is None
+        assert provider == "chatgpt"
+        mock_authenticator.get_access_token.assert_not_called()
+
+    @patch("litellm.llms.chatgpt.chat.transformation.Authenticator")
+    def test_public_model_metadata_does_not_authenticate(self, mock_authenticator_class: MagicMock) -> None:
+        mock_authenticator = mock_authenticator_class.return_value
+        mock_authenticator.get_api_base.return_value = "https://chatgpt.example.com/backend-api/codex"
+
+        model, provider, api_key, api_base = litellm.get_llm_provider(model="chatgpt/gpt-5.6-sol")
+        model_info = litellm.get_model_info(model="chatgpt/gpt-5.6-sol")
+
+        assert model == "gpt-5.6-sol"
+        assert provider == "chatgpt"
+        assert api_key is None
+        assert api_base == "https://chatgpt.example.com/backend-api/codex"
+        assert model_info["mode"] == "responses"
+        mock_authenticator.get_access_token.assert_not_called()
+
+    @patch("litellm.main.openai_chat_completions.completion")
+    @patch("litellm.llms.chatgpt.chat.transformation.Authenticator")
+    def test_completion_resolves_device_authentication_at_request_time(
+        self,
+        mock_authenticator_class: MagicMock,
+        mock_completion: MagicMock,
+    ) -> None:
+        mock_authenticator = mock_authenticator_class.return_value
+        mock_authenticator.get_api_base.return_value = "https://chatgpt.example.com/backend-api/codex"
+        mock_authenticator.get_access_token.return_value = "device-access-token"
+        mock_completion.return_value = {}
+
+        litellm.completion(
+            model="chatgpt/custom-chat-model",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+        mock_authenticator.get_access_token.assert_called_once_with()
+        request = mock_completion.call_args.kwargs
+        assert request["api_base"] == "https://chatgpt.example.com/backend-api/codex"
+        assert request["api_key"] == "device-access-token"
+
     @patch("litellm.llms.chatgpt.chat.transformation.Authenticator")
     def test_static_api_key_provider_info_skips_local_login(self, mock_authenticator_class: MagicMock) -> None:
         config = ChatGPTConfig()
@@ -38,9 +93,7 @@ class TestChatGPTConfig:
         mock_authenticator_class.return_value.get_access_token.assert_not_called()
 
     @patch("litellm.llms.chatgpt.chat.transformation.Authenticator")
-    def test_static_api_key_omits_account_id_and_ignores_caller_auth(
-        self, mock_authenticator_class: MagicMock
-    ) -> None:
+    def test_static_api_key_omits_account_id_and_ignores_caller_auth(self, mock_authenticator_class: MagicMock) -> None:
         mock_authenticator = MagicMock()
         mock_authenticator_class.return_value = mock_authenticator
         config = ChatGPTConfig()

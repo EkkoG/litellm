@@ -2355,6 +2355,16 @@ def _complete_custom_openai(
     stream = ctx.stream
     timeout = ctx.timeout
 
+    if custom_llm_provider == "chatgpt":
+        chatgpt_config = (
+            provider_config if isinstance(provider_config, litellm.ChatGPTConfig) else litellm.ChatGPTConfig()
+        )
+        api_base, api_key = chatgpt_config.resolve_request_credentials(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+        )
+
     api_base = (
         api_base  # for deepinfra/perplexity/anyscale/groq/friendliai we check in get_llm_provider and pass in the api base from there
         or litellm.api_base

@@ -23,6 +23,24 @@ class ChatGPTConfig(OpenAIConfig):
         super().__init__()
         self.authenticator = Authenticator()
 
+    def _get_static_credentials(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+        custom_llm_provider: str,
+    ) -> tuple[str, str] | None:
+        static_api_key = api_key.strip() if api_key else None
+        if not static_api_key:
+            return None
+        if not api_base:
+            raise AuthenticationError(
+                model=model,
+                llm_provider=custom_llm_provider,
+                message="ChatGPT api_key authentication requires an explicit api_base",
+            )
+        return api_base, static_api_key
+
     def _get_openai_compatible_provider_info(
         self,
         model: str,
@@ -30,15 +48,21 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
-        static_api_key = api_key.strip() if api_key else None
-        if static_api_key:
-            if not api_base:
-                raise AuthenticationError(
-                    model=model,
-                    llm_provider=custom_llm_provider,
-                    message="ChatGPT api_key authentication requires an explicit api_base",
-                )
-            return api_base, static_api_key, custom_llm_provider
+        static_credentials = self._get_static_credentials(model, api_base, api_key, custom_llm_provider)
+        if static_credentials is not None:
+            return *static_credentials, custom_llm_provider
+
+        return self.authenticator.get_api_base(), None, custom_llm_provider
+
+    def resolve_request_credentials(
+        self,
+        model: str,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str, str]:
+        static_credentials = self._get_static_credentials(model, api_base, api_key, "chatgpt")
+        if static_credentials is not None:
+            return static_credentials
 
         dynamic_api_base = self.authenticator.get_api_base()
         try:
@@ -46,10 +70,10 @@ class ChatGPTConfig(OpenAIConfig):
         except GetAccessTokenError as e:
             raise AuthenticationError(
                 model=model,
-                llm_provider=custom_llm_provider,
+                llm_provider="chatgpt",
                 message=str(e),
             )
-        return dynamic_api_base, dynamic_api_key, custom_llm_provider
+        return dynamic_api_base, dynamic_api_key
 
     def validate_environment(
         self,
