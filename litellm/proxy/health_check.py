@@ -9,7 +9,6 @@ import time
 from collections.abc import Mapping
 
 import litellm
-from litellm.utils import _get_model_info_helper
 
 logger = logging.getLogger(__name__)
 from litellm.constants import (
@@ -46,21 +45,6 @@ MINIMAL_DISPLAY_PARAMS = ["model", "mode_error"]
 _MAX_TOKEN_SUPPORT_MODES: frozenset[str] = frozenset({"chat", "completion", "responses"})
 
 
-def _get_model_info_for_health_check(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    model = litellm_params.get("model")
-    if not isinstance(model, str):
-        return {}
-    custom_llm_provider = litellm_params.get("custom_llm_provider")
-    api_base = litellm_params.get("api_base")
-    api_key = litellm_params.get("api_key")
-    return _get_model_info_helper(
-        model=model,
-        custom_llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else None,
-        api_base=api_base if isinstance(api_base, str) else None,
-        api_key=api_key if isinstance(api_key, str) else None,
-    )
-
-
 def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params: Mapping[str, object]) -> str | None:
     """
     Effective mode for a deployment's health-check probe.
@@ -74,9 +58,11 @@ def _resolve_health_check_mode(model_info: Mapping[str, object], litellm_params:
     explicit_mode = model_info.get("mode")
     if isinstance(explicit_mode, str):
         return explicit_mode
+    model = litellm_params.get("model")
+    if not isinstance(model, str):
+        return None
     try:
-        mode = _get_model_info_for_health_check(litellm_params).get("mode")
-        return mode if isinstance(mode, str) else None
+        return litellm.get_model_info(model=model).get("mode")
     except Exception:
         return None
 
@@ -428,10 +414,11 @@ def _resolve_health_check_max_tokens(model_info: dict, litellm_params: dict) -> 
         return int(explicit)
 
     is_wildcard = _health_check_deployment_is_wildcard(litellm_params)
+    deployment_model = _deployment_model_string_for_health_check(litellm_params)
 
     if not is_wildcard:
         try:
-            is_reasoning = _get_model_info_for_health_check(litellm_params).get("supports_reasoning") is True
+            is_reasoning = litellm.supports_reasoning(deployment_model)
         except Exception:
             is_reasoning = False
         tokens_reasoning = model_info.get("health_check_max_tokens_reasoning", None)

@@ -467,55 +467,6 @@ async def test_test_model_connection_loads_config_from_router():
 
 
 @pytest.mark.asyncio
-async def test_test_model_connection_chatgpt_static_auth_does_not_login():
-    mock_prisma_client = MagicMock()
-    mock_user_api_key_dict = UserAPIKeyAuth(
-        token="test-token",
-        user_id="test-user",
-        user_role=LitellmUserRoles.PROXY_ADMIN,
-    )
-    mock_health_check_result = {"status": "healthy"}
-    mock_ahealth_check = AsyncMock(return_value=mock_health_check_result)
-    litellm_params = {
-        "model": "chatgpt/gpt-5.6-luna",
-        "custom_llm_provider": "chatgpt",
-        "api_base": "https://gateway.example.com/backend-api/codex",
-        "api_key": "static-api-key",
-    }
-
-    with (
-        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
-        patch("litellm.proxy.proxy_server.llm_router", None),
-        patch("litellm.proxy.proxy_server.premium_user", False),
-        patch(
-            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
-            AsyncMock(return_value=True),
-        ),
-        patch(
-            "litellm.llms.chatgpt.authenticator.Authenticator.get_access_token",
-            side_effect=AssertionError("local login must not run"),
-        ) as mock_get_access_token,
-        patch(
-            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
-            mock_ahealth_check,
-        ),
-    ):
-        result = await health_test_model_connection(
-            request=MagicMock(),
-            mode="responses",
-            litellm_params=litellm_params,
-            model_info={"mode": "responses"},
-            user_api_key_dict=mock_user_api_key_dict,
-        )
-
-    mock_get_access_token.assert_not_called()
-    probed_params = mock_ahealth_check.call_args.kwargs["model_params"]
-    assert probed_params["api_base"] == litellm_params["api_base"]
-    assert probed_params["api_key"] == litellm_params["api_key"]
-    assert result["status"] == "success"
-
-
-@pytest.mark.asyncio
 async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicate_model_names():
     """
     When two deployments share the same `model_name` (e.g. wildcard

@@ -143,10 +143,10 @@ def test_resolve_health_check_max_tokens_reasoning_specific_model_info():
     }
     litellm_params = {"model": "openai/gpt-4o"}
 
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": False}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
         assert _resolve_health_check_max_tokens(model_info, litellm_params) == 2
 
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": True}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
         assert _resolve_health_check_max_tokens(model_info, litellm_params) == 64
 
 
@@ -158,7 +158,7 @@ def test_explicit_health_check_max_tokens_beats_reasoning_specific():
     }
     litellm_params = {"model": "openai/gpt-4o"}
 
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": True}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
         assert _resolve_health_check_max_tokens(model_info, litellm_params) == 9
 
 
@@ -169,7 +169,7 @@ def test_reasoning_specific_falls_through_when_wrong_branch_only(monkeypatch):
     model_info = {"health_check_max_tokens_non_reasoning": 3}
     litellm_params = {"model": "openai/o1"}
 
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": True}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
         assert _resolve_health_check_max_tokens(model_info, litellm_params) == 16
 
 
@@ -181,12 +181,12 @@ async def test_background_split_env_reasoning_vs_non_reasoning(monkeypatch):
     model_info = {}
     litellm_params = {"model": "azure/gpt-4"}
 
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": False}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
         updated = _update_litellm_params_for_health_check(model_info, litellm_params)
         assert updated["max_tokens"] == 16
 
     litellm_params2 = {"model": "openai/o1"}
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": True}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
         updated2 = _update_litellm_params_for_health_check(model_info, litellm_params2)
         assert updated2["max_tokens"] == 50
 
@@ -199,7 +199,7 @@ async def test_reasoning_env_precedence_over_global(monkeypatch):
     model_info = {}
     litellm_params = {"model": "openai/gpt-5.4"}
 
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": True}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=True):
         updated = _update_litellm_params_for_health_check(model_info, litellm_params)
         assert updated["max_tokens"] == 20
 
@@ -212,31 +212,9 @@ async def test_non_reasoning_uses_global_when_reasoning_env_set(monkeypatch):
     model_info = {}
     litellm_params = {"model": "azure/gpt-4"}
 
-    with patch.object(hc_module, "_get_model_info_for_health_check", return_value={"supports_reasoning": False}):
+    with patch.object(hc_module.litellm, "supports_reasoning", return_value=False):
         updated = _update_litellm_params_for_health_check(model_info, litellm_params)
         assert updated["max_tokens"] == 10
-
-
-def test_chatgpt_static_auth_health_check_params_do_not_login(monkeypatch):
-    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS", None)
-    monkeypatch.setattr(hc_module, "BACKGROUND_HEALTH_CHECK_MAX_TOKENS_REASONING", None)
-    litellm_params = {
-        "model": "chatgpt/gpt-5.6-luna",
-        "custom_llm_provider": "chatgpt",
-        "api_base": "https://gateway.example.com/backend-api/codex",
-        "api_key": "static-api-key",
-    }
-
-    with patch(
-        "litellm.llms.chatgpt.authenticator.Authenticator.get_access_token",
-        side_effect=AssertionError("local login must not run"),
-    ) as mock_get_access_token:
-        updated = _update_litellm_params_for_health_check({"mode": "responses"}, litellm_params)
-
-    mock_get_access_token.assert_not_called()
-    assert updated["api_base"] == litellm_params["api_base"]
-    assert updated["api_key"] == litellm_params["api_key"]
-    assert updated["max_tokens"] == 16
 
 
 def test_wildcard_ignores_reasoning_split_model_info(monkeypatch):
