@@ -63,6 +63,27 @@ def test_get_provider_create_fields():
     ), "Expected at least one provider to have detailed credential fields"
 
 
+def test_chatgpt_provider_fields_support_static_api_key_mode():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    client = TestClient(app_instance)
+
+    response = client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers = response.json()
+
+    chatgpt = next((provider for provider in providers if provider["provider"] == "ChatGPT"), None)
+    assert chatgpt is not None
+    assert chatgpt["litellm_provider"] == "chatgpt"
+    assert chatgpt["default_model_placeholder"] == "chatgpt/gpt-5.6-sol"
+
+    fields_by_key = {field["key"]: field for field in chatgpt["credential_fields"]}
+    assert fields_by_key["api_base"]["required"] is False
+    assert fields_by_key["api_key"]["required"] is False
+    assert fields_by_key["api_key"]["field_type"] == "password"
+    assert "skips local ChatGPT login" in fields_by_key["api_key"]["tooltip"]
+
+
 def test_get_litellm_model_cost_map_returns_cost_map():
     app = FastAPI()
     app.include_router(router)

@@ -41,6 +41,13 @@ vi.mock("../networking", async () => {
         default_model_placeholder: "gpt-3.5-turbo",
         credential_fields: [],
       },
+      {
+        provider: "ChatGPT",
+        provider_display_name: "ChatGPT",
+        litellm_provider: "chatgpt",
+        default_model_placeholder: "chatgpt/gpt-5.6-sol",
+        credential_fields: [],
+      },
     ]),
   };
 });
@@ -53,6 +60,13 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
         provider_display_name: "OpenAI",
         litellm_provider: "openai",
         default_model_placeholder: "gpt-3.5-turbo",
+        credential_fields: [],
+      },
+      {
+        provider: "ChatGPT",
+        provider_display_name: "ChatGPT",
+        litellm_provider: "chatgpt",
+        default_model_placeholder: "chatgpt/gpt-5.6-sol",
         credential_fields: [],
       },
     ],
@@ -185,6 +199,22 @@ describe("AddModelForm", () => {
     renderWithProviders(<AddModelForm {...props} />);
 
     expect(await screen.findByRole("heading", { name: "Add Model" })).toBeInTheDocument();
+  });
+
+  it("should force responses mode for ChatGPT", async () => {
+    const mockUseAuthorized = vi.mocked(await import("@/app/(dashboard)/hooks/useAuthorized"));
+    mockUseAuthorized.default.mockReturnValue(mockAuthorizedUser("proxy_admin", "user-1", true));
+    const props = createTestProps();
+    const user = userEvent.setup();
+
+    renderWithProviders(<AddModelForm {...props} />);
+
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByRole("option", { name: /ChatGPT/ }));
+
+    await waitFor(() => {
+      expect(props.form.getFieldValue("mode")).toBe("responses");
+    });
   });
 
   it("should show proxy admin only (not team admin) - should not see Select Team dropdown unless switch is toggled", async () => {

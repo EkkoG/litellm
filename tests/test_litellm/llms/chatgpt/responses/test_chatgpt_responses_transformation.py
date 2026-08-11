@@ -14,6 +14,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
+from litellm.exceptions import AuthenticationError
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import LlmProviders
@@ -85,6 +86,46 @@ class TestChatGPTResponsesAPITransformation:
         assert headers["content-type"] == "application/json"
         assert headers["accept"] == "text/event-stream"
         assert headers["session_id"] == "session-123"
+
+    @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
+    def test_static_api_key_skips_local_login_and_omits_account_id(self, mock_authenticator_class):
+        mock_auth_instance = MagicMock()
+        mock_authenticator_class.return_value = mock_auth_instance
+        config = ChatGPTResponsesAPIConfig()
+
+        headers = config.validate_environment(
+            headers={
+                "Authorization": "Bearer caller-key",
+                "ChatGPT-Account-Id": "caller-account",
+                "originator": "custom-origin",
+            },
+            model="gpt-5.6-sol",
+            litellm_params=GenericLiteLLMParams(
+                api_key="gateway-key",
+                api_base="https://gateway.example.com/backend-api/codex",
+                litellm_session_id="session-123",
+            ),
+        )
+
+        assert headers["Authorization"] == "Bearer gateway-key"
+        assert "ChatGPT-Account-Id" not in headers
+        assert headers["originator"] == "custom-origin"
+        assert headers["session_id"] == "session-123"
+        mock_auth_instance.get_access_token.assert_not_called()
+        mock_auth_instance.get_account_id.assert_not_called()
+
+    @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")
+    def test_static_api_key_requires_api_base(self, mock_authenticator_class):
+        config = ChatGPTResponsesAPIConfig()
+
+        with pytest.raises(AuthenticationError, match="requires an explicit api_base"):
+            config.validate_environment(
+                headers={},
+                model="gpt-5.6-sol",
+                litellm_params=GenericLiteLLMParams(api_key="gateway-key"),
+            )
+
+        mock_authenticator_class.return_value.get_access_token.assert_not_called()
 
     @pytest.mark.parametrize("header_name", ["session-id", "session_id"])
     @patch("litellm.llms.chatgpt.responses.transformation.Authenticator")

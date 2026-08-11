@@ -57,6 +57,26 @@ vi.mock("../networking", async () => {
         ],
       },
       {
+        provider: "ChatGPT",
+        provider_display_name: Providers.ChatGPT,
+        litellm_provider: "chatgpt",
+        default_model_placeholder: "chatgpt/gpt-5.6-sol",
+        credential_fields: [
+          {
+            key: "api_base",
+            label: "API Base",
+            placeholder: "https://gateway.example.com/backend-api/codex",
+            required: false,
+          },
+          {
+            key: "api_key",
+            label: "Gateway API Key",
+            field_type: "password",
+            required: false,
+          },
+        ],
+      },
+      {
         provider: "Azure",
         provider_display_name: Providers.Azure,
         litellm_provider: "azure",
@@ -180,6 +200,22 @@ describe("ProviderSpecificFields", () => {
       const apiBaseInput = screen.getByPlaceholderText("https://...");
       expect(apiBaseInput).toBeInTheDocument();
       expect(apiBaseInput).toHaveAttribute("type", "text");
+    });
+  });
+
+  it("should render optional ChatGPT gateway fields", async () => {
+    const queryClient = createQueryClient();
+    render(
+      <QueryClientProvider client={queryClient}>
+        <Form>
+          <ProviderSpecificFields selectedProvider={Providers.ChatGPT} />
+        </Form>
+      </QueryClientProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Gateway API Key")).toBeInTheDocument();
+      expect(screen.getByPlaceholderText("https://gateway.example.com/backend-api/codex")).toBeInTheDocument();
     });
   });
 

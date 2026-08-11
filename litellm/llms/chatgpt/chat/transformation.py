@@ -30,6 +30,16 @@ class ChatGPTConfig(OpenAIConfig):
         api_key: str | None,
         custom_llm_provider: str,
     ) -> tuple[str | None, str | None, str]:
+        static_api_key = api_key.strip() if api_key else None
+        if static_api_key:
+            if not api_base:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider=custom_llm_provider,
+                    message="ChatGPT api_key authentication requires an explicit api_base",
+                )
+            return api_base, static_api_key, custom_llm_provider
+
         dynamic_api_base = self.authenticator.get_api_base()
         try:
             dynamic_api_key = self.authenticator.get_access_token()
@@ -55,10 +65,24 @@ class ChatGPTConfig(OpenAIConfig):
             headers, model, messages, optional_params, litellm_params, api_key, api_base
         )
 
-        account_id = self.authenticator.get_account_id()
+        configured_api_key = litellm_params.get("api_key")
+        static_api_key = configured_api_key.strip() if isinstance(configured_api_key, str) else None
+        if static_api_key and not litellm_params.get("api_base"):
+            raise AuthenticationError(
+                model=model,
+                llm_provider="chatgpt",
+                message="ChatGPT api_key authentication requires an explicit api_base",
+            )
+
+        account_id = None if static_api_key else self.authenticator.get_account_id()
         session_id = derive_chatgpt_session_id(litellm_params, messages, account_id)
         default_headers = get_chatgpt_default_headers(api_key or "", account_id, session_id)
-        return {**default_headers, **validated_headers}
+        caller_headers = {
+            key: value
+            for key, value in validated_headers.items()
+            if not isinstance(key, str) or key.lower() not in ("authorization", "chatgpt-account-id")
+        }
+        return {**default_headers, **caller_headers}
 
     def post_stream_processing(self, stream: Any) -> Any:
         return ChatGPTToolCallNormalizer(stream)

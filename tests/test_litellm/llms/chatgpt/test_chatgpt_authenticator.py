@@ -32,6 +32,12 @@ class TestChatGPTAuthenticator:
             token = authenticator.get_access_token()
             assert token == "token-123"
 
+    def test_init_does_not_create_token_directory(self):
+        with patch("os.makedirs") as mock_makedirs:
+            Authenticator()
+
+        mock_makedirs.assert_not_called()
+
     def test_get_access_token_refresh(self, authenticator):
         past_time = time.time() - 10
         auth_data = json.dumps(

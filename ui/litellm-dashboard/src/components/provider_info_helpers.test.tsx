@@ -38,6 +38,12 @@ describe("provider_info_helpers", () => {
       expect(result.logo).toBe(providerLogoMap[Providers.OpenAI]);
     });
 
+    it("should map chatgpt provider value to ChatGPT display name and logo", () => {
+      const result = getProviderLogoAndName("chatgpt");
+      expect(result.displayName).toBe(Providers.ChatGPT);
+      expect(result.logo).toBe(providerLogoMap[Providers.ChatGPT]);
+    });
+
     it("should map anthropic provider value to Anthropic display name and logo", () => {
       const result = getProviderLogoAndName("anthropic");
       expect(result.displayName).toBe(Providers.Anthropic);

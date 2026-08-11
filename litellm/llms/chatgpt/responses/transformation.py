@@ -46,19 +46,36 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         model: str,
         litellm_params: GenericLiteLLMParams | None,
     ) -> dict:
-        try:
-            access_token = self.authenticator.get_access_token()
-        except GetAccessTokenError as e:
-            raise AuthenticationError(
-                model=model,
-                llm_provider="chatgpt",
-                message=str(e),
-            )
+        configured_api_key = getattr(litellm_params, "api_key", None)
+        static_api_key = configured_api_key.strip() if isinstance(configured_api_key, str) else None
+        if static_api_key:
+            if not getattr(litellm_params, "api_base", None):
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message="ChatGPT api_key authentication requires an explicit api_base",
+                )
+            access_token = static_api_key
+            account_id = None
+        else:
+            try:
+                access_token = self.authenticator.get_access_token()
+            except GetAccessTokenError as e:
+                raise AuthenticationError(
+                    model=model,
+                    llm_provider="chatgpt",
+                    message=str(e),
+                )
+            account_id = self.authenticator.get_account_id()
 
-        account_id = self.authenticator.get_account_id()
         session_id = ensure_chatgpt_session_id(litellm_params)
         default_headers = get_chatgpt_default_headers(access_token, account_id, session_id)
-        return {**default_headers, **headers}
+        caller_headers = {
+            key: value
+            for key, value in headers.items()
+            if not isinstance(key, str) or key.lower() not in ("authorization", "chatgpt-account-id")
+        }
+        return {**default_headers, **caller_headers}
 
     def transform_responses_api_request(
         self,

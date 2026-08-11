@@ -167,10 +167,13 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                     placeholder={isProviderMetadataLoading ? "Loading providers..." : "Select a provider"}
                     optionFilterProp="data-label"
                     onChange={(value) => {
+                      const nextMode = value === Providers.ChatGPT ? "responses" : "chat";
                       setSelectedProvider(value as Providers);
                       setProviderModelsFn(value as Providers);
+                      setTestMode(nextMode);
                       form.setFieldsValue({
                         custom_llm_provider: value,
+                        mode: nextMode,
                       });
                       form.setFieldsValue({
                         model: [],
@@ -213,6 +216,7 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
                     style={{ width: "100%" }}
                     value={testMode}
                     onChange={(value) => setTestMode(value)}
+                    disabled={selectedProvider === Providers.ChatGPT}
                     options={TEST_MODES}
                   />
                 </Form.Item>
