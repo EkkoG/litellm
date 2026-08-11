@@ -3714,6 +3714,34 @@ def test_get_deployment_credentials_with_provider_resolves_credential_name():
     litellm.credential_list = []
 
 
+def test_upsert_chatgpt_deployment_does_not_authenticate():
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    deployment = Deployment(
+        model_name="luna",
+        litellm_params=LiteLLM_Params(
+            model="chatgpt/gpt-5.6-luna",
+            custom_llm_provider="chatgpt",
+            litellm_credential_name="chatgpt-static-key",
+        ),
+        model_info={"id": "chatgpt-luna"},
+    )
+    router = litellm.Router(model_list=[], ignore_invalid_deployments=True)
+
+    with (
+        patch("litellm.credential_list", []),
+        patch(
+            "litellm.llms.chatgpt.authenticator.Authenticator.get_access_token",
+            side_effect=AssertionError("local login must not run"),
+        ) as mock_get_access_token,
+    ):
+        added = router.upsert_deployment(deployment)
+
+    assert added == deployment
+    assert router.get_deployment(model_id="chatgpt-luna") is not None
+    mock_get_access_token.assert_not_called()
+
+
 def _team_wildcard_model(api_key: str, model_id: str = "team-wildcard-id") -> dict:
     return {
         "model_name": f"model_name_team-1_{model_id}",
