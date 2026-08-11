@@ -129,6 +129,18 @@ class TestChatGPTResponsesAPITransformation:
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
 
+    def test_chatgpt_never_fake_streams_unknown_models(self):
+        config = ChatGPTResponsesAPIConfig()
+
+        assert (
+            config.should_fake_stream(
+                model="chatgpt/custom-db-model",
+                stream=True,
+                custom_llm_provider="chatgpt",
+            )
+            is False
+        )
+
     def test_chatgpt_preserves_prompt_cache_key(self):
         config = ChatGPTResponsesAPIConfig()
         request = config.transform_responses_api_request(

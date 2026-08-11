@@ -107,6 +107,14 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
 
         return {k: v for k, v in request.items() if k in allowed_keys}
 
+    def should_fake_stream(
+        self,
+        model: str | None,
+        stream: bool | None,
+        custom_llm_provider: str | None = None,
+    ) -> bool:
+        return False
+
     def _apply_derived_session_id_header(
         self,
         input: object,
