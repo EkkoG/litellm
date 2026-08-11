@@ -6954,19 +6954,13 @@ class ProxyConfig:
         try:
             credentials = await CredentialsRepository(prisma_client).find_all()
             credentials = [self.decrypt_credentials(cred) for cred in credentials]
+            await self.delete_credentials(credentials)  # delete credentials that are not in the all-up list
             CredentialAccessor.upsert_credentials(credentials)  # upsert credentials that are in the all-up list
         except Exception as e:
             verbose_proxy_logger.exception(
                 f"litellm.proxy_server.py::get_credentials() - Error getting credentials from DB - {e!s}"
             )
             return []
-        try:
-            await self.delete_credentials(credentials)  # delete credentials that are not in the all-up list
-        except Exception as e:
-            verbose_proxy_logger.exception(
-                f"litellm.proxy_server.py::get_credentials() - Error cleaning up stale credentials - {e!s}"
-            )
-        return credentials
 
 
 proxy_config = ProxyConfig()
